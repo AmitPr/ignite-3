@@ -1,10 +1,10 @@
 /*
  * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
+ * contributor license agreements. See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.
  * The ASF licenses this file to You under the Apache License, Version 2.0
  * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+ * the License. You may obtain a copy of the License at
  *
  *      http://www.apache.org/licenses/LICENSE-2.0
  *
@@ -17,8 +17,10 @@
 
 package org.apache.ignite.client;
 
+import static org.apache.ignite.internal.testframework.IgniteTestUtils.waitForCondition;
+import static org.apache.ignite.lang.ErrorGroups.Client.TABLE_ID_NOT_FOUND_ERR;
 import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.Matchers.startsWith;
+import static org.hamcrest.Matchers.containsString;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -28,8 +30,14 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
+import java.util.NoSuchElementException;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Consumer;
+import org.apache.ignite.client.fakes.FakeIgniteTables;
 import org.apache.ignite.client.fakes.FakeSchemaRegistry;
-import org.apache.ignite.internal.client.proto.ClientErrorCode;
+import org.apache.ignite.internal.testframework.IgniteTestUtils;
+import org.apache.ignite.lang.IgniteException;
 import org.apache.ignite.table.RecordView;
 import org.apache.ignite.table.Table;
 import org.apache.ignite.table.Tuple;
@@ -46,7 +54,7 @@ public class ClientTableTest extends AbstractClientTableTest {
 
         var key = Tuple.create().set("name", "123");
 
-        var ex = assertThrows(IgniteClientException.class, () -> table.get(null, key));
+        var ex = assertThrows(IgniteException.class, () -> table.get(null, key));
 
         assertTrue(ex.getMessage().contains("Missed key column: ID"),
                 ex.getMessage());
@@ -82,7 +90,7 @@ public class ClientTableTest extends AbstractClientTableTest {
         assertEquals(DEFAULT_NAME, iter.next());
 
         assertFalse(iter.hasNext());
-        assertNull(iter.next());
+        assertThrows(NoSuchElementException.class, iter::next);
 
         assertTupleEquals(tuple, resTuple);
     }
@@ -102,29 +110,48 @@ public class ClientTableTest extends AbstractClientTableTest {
     }
 
     @Test
-    public void testGetReturningTupleWithUnknownSchemaRequestsNewSchema() throws Exception {
-        FakeSchemaRegistry.setLastVer(2);
-
-        var table = defaultTable();
-        var recView = table.recordView();
-        Tuple tuple = tuple();
-        recView.upsert(null, tuple);
-
-        FakeSchemaRegistry.setLastVer(1);
+    public void testGetReturningTupleWithUnknownSchemaRequestsNewSchema() {
+        var embeddedView = defaultTable().recordView();
 
         try (var client2 = startClient()) {
-            RecordView<Tuple> table2 = client2.tables().table(table.name()).recordView();
-            var resTuple = table2.get(null, tuple);
+            // Upsert from client, which will cache schema version 1.
+            FakeSchemaRegistry.setLastVer(1);
+            RecordView<Tuple> clientView = client2.tables().table(DEFAULT_TABLE).recordView();
+            clientView.upsert(null, tuple(-1L));
 
-            assertEquals(2, tuple.columnCount());
+            // Upsert from server with schema version 2.
+            FakeSchemaRegistry.setLastVer(2);
+            embeddedView.upsert(null, tuple());
+
+            // Get from client, which should force schema update and retry.
+            var resTuple = clientView.get(null, defaultTupleKey());
+
             assertEquals(3, resTuple.columnCount());
-
-            assertEquals(-1, tuple.columnIndex("XYZ"));
             assertEquals(2, resTuple.columnIndex("XYZ"));
-
             assertEquals(DEFAULT_NAME, resTuple.stringValue("name"));
             assertEquals(DEFAULT_ID, resTuple.longValue("id"));
         }
+    }
+
+    @Test
+    public void testOperationWithoutTupleResultRequestsNewSchema() throws Exception {
+        AtomicLong idGen = new AtomicLong(1000L);
+
+        checkSchemaUpdate(recordView -> recordView.get(null, tuple(idGen.incrementAndGet())));
+        checkSchemaUpdate(recordView -> recordView.getAll(null, List.of(tuple(idGen.incrementAndGet()))));
+        checkSchemaUpdate(recordView -> recordView.upsert(null, tuple(idGen.incrementAndGet())));
+        checkSchemaUpdate(recordView -> recordView.upsertAll(null, List.of(tuple(idGen.incrementAndGet()))));
+        checkSchemaUpdate(recordView -> recordView.getAndUpsert(null, tuple(idGen.incrementAndGet())));
+        checkSchemaUpdate(recordView -> recordView.insert(null, tuple(idGen.incrementAndGet())));
+        checkSchemaUpdate(recordView -> recordView.insertAll(null, List.of(tuple(idGen.incrementAndGet()))));
+        checkSchemaUpdate(recordView -> recordView.replace(null, tuple(idGen.incrementAndGet())));
+        checkSchemaUpdate(recordView -> recordView.replace(null, tuple(idGen.incrementAndGet()), tuple(idGen.incrementAndGet())));
+        checkSchemaUpdate(recordView -> recordView.getAndReplace(null, tuple(idGen.incrementAndGet())));
+        checkSchemaUpdate(recordView -> recordView.delete(null, tuple(idGen.incrementAndGet())));
+        checkSchemaUpdate(recordView -> recordView.deleteExact(null, tuple(idGen.incrementAndGet())));
+        checkSchemaUpdate(recordView -> recordView.getAndDelete(null, tuple(idGen.incrementAndGet())));
+        checkSchemaUpdate(recordView -> recordView.deleteAll(null, List.of(tuple(idGen.incrementAndGet()))));
+        checkSchemaUpdate(recordView -> recordView.deleteAllExact(null, List.of(tuple(idGen.incrementAndGet()))));
     }
 
     @Test
@@ -172,6 +199,59 @@ public class ClientTableTest extends AbstractClientTableTest {
 
         assertEquals(3L, res[1].longValue("id"));
         assertEquals("3", res[1].stringValue("name"));
+    }
+
+    @Test
+    public void testContains() {
+        RecordView<Tuple> recordView = defaultTable().recordView();
+
+        long key = 101L;
+        Tuple keyTuple = tuple(key);
+        Tuple valTuple = tuple(key, "201");
+
+        recordView.insert(null, valTuple);
+
+        assertThrows(NullPointerException.class, () -> recordView.contains(null, null));
+
+        assertTrue(recordView.contains(null, keyTuple));
+
+        Tuple missedKeyTuple = tuple(0L);
+
+        assertFalse(recordView.contains(null, missedKeyTuple));
+    }
+
+    @Test
+    public void testContainsAll() {
+        RecordView<Tuple> recordView = defaultTable().recordView();
+
+        long firstKey = 101L;
+        Tuple firstKeyTuple = tuple(firstKey);
+        Tuple firstValTuple = tuple(firstKey, "201");
+
+        long secondKey = 102L;
+        Tuple secondKeyTuple = tuple(secondKey);
+        Tuple secondValTuple = tuple(secondKey, "202");
+
+        long thirdKey = 103L;
+        Tuple thirdKeyTuple = tuple(thirdKey);
+        Tuple thirdValTuple = tuple(thirdKey, "203");
+
+        List<Tuple> recs = List.of(firstValTuple, secondValTuple, thirdValTuple);
+
+        recordView.insertAll(null, recs);
+
+        assertThrows(NullPointerException.class, () -> recordView.containsAll(null, null));
+        assertThrows(NullPointerException.class, () -> recordView.containsAll(null, List.of(firstKeyTuple, null, thirdKeyTuple)));
+
+        assertTrue(recordView.containsAll(null, List.of()));
+        assertTrue(recordView.containsAll(null, List.of(firstKeyTuple)));
+        assertTrue(recordView.containsAll(null, List.of(firstKeyTuple, secondKeyTuple, thirdKeyTuple)));
+
+        long missedKey = 0L;
+        Tuple missedKeyTuple = tuple(missedKey);
+
+        assertFalse(recordView.containsAll(null, List.of(missedKeyTuple)));
+        assertFalse(recordView.containsAll(null, List.of(firstKeyTuple, secondKeyTuple, missedKeyTuple)));
     }
 
     @Test
@@ -306,10 +386,10 @@ public class ClientTableTest extends AbstractClientTableTest {
         assertNotNull(table.get(null, tuple(2L)));
 
         assertEquals(3L, skippedTuples[0].longValue("id"));
-        assertNull(skippedTuples[0].stringValue("name"));
+        assertEquals(-1, skippedTuples[0].columnIndex("name"));
 
         assertEquals(4L, skippedTuples[1].longValue("id"));
-        assertNull(skippedTuples[1].stringValue("name"));
+        assertEquals(-1, skippedTuples[1].columnIndex("name"));
     }
 
     @Test
@@ -371,30 +451,48 @@ public class ClientTableTest extends AbstractClientTableTest {
                 .set("id", 1)
                 .set("strNonNull", null);
 
-        var ex = assertThrows(IgniteClientException.class, () -> table.upsert(null, tuple));
+        var ex = assertThrows(IgniteException.class, () -> table.upsert(null, tuple));
 
-        assertTrue(ex.getMessage().contains("null was passed, but column is not nullable"), ex.getMessage());
+        assertTrue(ex.getMessage().contains("Column 'STRNONNULL' does not allow NULLs"), ex.getMessage());
     }
 
     @Test
     public void testColumnTypeMismatchThrowsException() {
         var tuple = Tuple.create().set("id", "str");
 
-        var ex = assertThrows(IgniteClientException.class, () -> defaultTable().recordView().upsert(null, tuple));
-
-        assertTrue(ex.getMessage().contains("Incorrect value type for column 'ID': Expected Integer, but got String"), ex.getMessage());
+        var ex = assertThrows(IgniteException.class, () -> defaultTable().recordView().upsert(null, tuple));
+        assertEquals("Value type does not match [column='ID', expected=INT64, actual=STRING]", ex.getMessage());
     }
 
     @Test
     public void testGetFromDroppedTableThrowsException() {
-        server.tables().createTable("drop-me", null);
+        ((FakeIgniteTables) server.tables()).createTable("drop-me");
         Table clientTable = client.tables().table("drop-me");
-        server.tables().dropTable("drop-me");
+        ((FakeIgniteTables) server.tables()).dropTable("drop-me");
 
         Tuple tuple = Tuple.create().set("id", 1);
-        var ex = assertThrows(IgniteClientException.class, () -> clientTable.recordView().get(null, tuple));
+        var ex = assertThrows(IgniteException.class, () -> clientTable.recordView().get(null, tuple));
 
-        assertThat(ex.getMessage(), startsWith("Table does not exist: "));
-        assertEquals(ClientErrorCode.TABLE_ID_DOES_NOT_EXIST, ex.errorCode());
+        assertThat(ex.getMessage(), containsString("Table does not exist: "));
+        assertEquals(TABLE_ID_NOT_FOUND_ERR, ex.code());
+    }
+
+    private void checkSchemaUpdate(Consumer<RecordView<Tuple>> consumer) throws Exception {
+        try (var client2 = startClient()) {
+            var table = client2.tables().table(defaultTable().name());
+            Map<Integer, Object> schemas = IgniteTestUtils.getFieldValue(table, "schemas");
+            var recView = table.recordView();
+
+            assertEquals(0, schemas.size());
+
+            FakeSchemaRegistry.setLastVer(1);
+            consumer.accept(recView);
+            assertNull(schemas.get(2));
+
+            FakeSchemaRegistry.setLastVer(2);
+            consumer.accept(recView);
+
+            assertTrue(waitForCondition(() -> schemas.get(2) != null, 1000));
+        }
     }
 }

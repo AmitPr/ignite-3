@@ -1,10 +1,10 @@
 /*
  * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
+ * contributor license agreements. See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.
  * The ASF licenses this file to You under the Apache License, Version 2.0
  * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+ * the License. You may obtain a copy of the License at
  *
  *      http://www.apache.org/licenses/LICENSE-2.0
  *
@@ -17,15 +17,12 @@
 
 package org.apache.ignite.internal.pagememory.persistence.checkpoint;
 
-import org.apache.ignite.internal.pagememory.FullPageId;
-import org.apache.ignite.internal.pagememory.persistence.PageMemoryImpl;
-
 /**
  * Data class of checkpoint information.
  */
 class Checkpoint {
-    /** Checkpoint pages. */
-    final IgniteConcurrentMultiPairQueue<PageMemoryImpl, FullPageId> dirtyPages;
+    /** Sorted dirty pages from data regions that should be checkpointed. */
+    final CheckpointDirtyPages dirtyPages;
 
     /** Checkpoint progress status. */
     final CheckpointProgressImpl progress;
@@ -36,17 +33,17 @@ class Checkpoint {
     /**
      * Constructor.
      *
-     * @param dirtyPages Pages to write to the page store.
+     * @param dirtyPages Sorted dirty pages from data regions that should be checkpointed.
      * @param progress Checkpoint progress status.
      */
     Checkpoint(
-            IgniteConcurrentMultiPairQueue<PageMemoryImpl, FullPageId> dirtyPages,
+            CheckpointDirtyPages dirtyPages,
             CheckpointProgressImpl progress
     ) {
         this.dirtyPages = dirtyPages;
         this.progress = progress;
 
-        dirtyPagesSize = dirtyPages.initialSize();
+        dirtyPagesSize = dirtyPages.dirtyPagesCount();
     }
 
     /**

@@ -91,8 +91,8 @@ namespace Apache.Ignite.Tests
             Assert.AreEqual(0, msg[1]);
             Assert.AreEqual(0, msg[2]);
 
-            // Result code.
-            Assert.AreEqual(0, msg[3]);
+            // Result code (null = success).
+            Assert.AreEqual(MessagePackCode.Nil, msg[3]);
         }
 
         private static unsafe void WriteHandshake(Stream stream, int majorVersion = 3)
@@ -108,7 +108,7 @@ namespace Apache.Ignite.Tests
             writer.Write(2); // Client type: general purpose.
 
             writer.WriteBinHeader(0); // Features.
-            writer.WriteMapHeader(0); // Extensions.
+            writer.Write(0); // Extensions.
 
             writer.Flush();
 

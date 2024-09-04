@@ -17,7 +17,10 @@
 
 namespace Apache.Ignite.Tests
 {
+    using System.Linq;
     using System.Threading.Tasks;
+    using Internal;
+    using Internal.Buffers;
     using NUnit.Framework;
 
     /// <summary>
@@ -44,6 +47,40 @@ namespace Apache.Ignite.Tests
             var tables = await client.Tables.GetTablesAsync();
 
             Assert.Greater(tables.Count, 0);
+        }
+
+        [Test]
+        public async Task TestToString()
+        {
+            var address = "127.0.0.1:" + ServerPort;
+            var cfg = new IgniteClientConfiguration { Endpoints = { address } };
+            using var client = await IgniteClient.StartAsync(cfg);
+            var id = client.GetConnections().Single().Node.Id;
+
+            var expected = $"IgniteClientInternal {{ Connections = [ ClusterNode {{ " +
+                           $"Id = {id}, " +
+                           $"Name = org.apache.ignite.internal.runner.app.PlatformTestNodeRunner, " +
+                           $"Address = {address} }} ] }}";
+
+            Assert.AreEqual(expected, client.ToString());
+        }
+
+        [Test]
+        public async Task TestHeartbeat()
+        {
+            using var client = await IgniteClient.StartAsync(GetConfig());
+            IgniteClientInternal clientInternal = (IgniteClientInternal)client;
+
+            var sockets = clientInternal.Socket.GetSockets().ToList();
+
+            using var payload = new PooledArrayBuffer();
+            payload.MessageWriter.Write("foo bar baz");
+
+            foreach (var socket in sockets)
+            {
+                await socket.HeartbeatAsync();
+                await socket.HeartbeatAsync(payload);
+            }
         }
     }
 }

@@ -15,16 +15,12 @@
  * limitations under the License.
  */
 
-namespace Apache.Ignite.Benchmarks
-{
-    using BenchmarkDotNet.Running;
-    using Table.Serialization;
+namespace Apache.Ignite.Benchmarks;
 
-    internal static class Program
-    {
-        private static void Main()
-        {
-            BenchmarkRunner.Run<SerializerHandlerReadBenchmarks>();
-        }
-    }
+using BenchmarkDotNet.Running;
+
+internal static class Program
+{
+    // IMPORTANT: Disable Netty leak detector when using a real Ignite server for benchmarks.
+    private static void Main() => BenchmarkRunner.Run<HeartbeatBenchmark>();
 }

@@ -1,10 +1,10 @@
 /*
  * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
+ * contributor license agreements. See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.
  * The ASF licenses this file to You under the Apache License, Version 2.0
  * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+ * the License. You may obtain a copy of the License at
  *
  *      http://www.apache.org/licenses/LICENSE-2.0
  *
@@ -21,8 +21,8 @@ import static java.lang.System.nanoTime;
 import static org.apache.ignite.internal.pagememory.persistence.checkpoint.CheckpointState.FINISHED;
 import static org.apache.ignite.internal.pagememory.persistence.checkpoint.CheckpointState.LOCK_RELEASED;
 import static org.apache.ignite.internal.pagememory.persistence.checkpoint.CheckpointState.LOCK_TAKEN;
-import static org.apache.ignite.internal.pagememory.persistence.checkpoint.CheckpointState.MARKER_STORED_TO_DISK;
-import static org.apache.ignite.internal.pagememory.persistence.checkpoint.CheckpointState.PAGE_SNAPSHOT_TAKEN;
+import static org.apache.ignite.internal.pagememory.persistence.checkpoint.CheckpointState.PAGES_SNAPSHOT_TAKEN;
+import static org.apache.ignite.internal.pagememory.persistence.checkpoint.CheckpointState.PAGES_SORTED;
 import static org.apache.ignite.internal.pagememory.persistence.checkpoint.CheckpointState.SCHEDULED;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.greaterThanOrEqualTo;
@@ -30,6 +30,7 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -38,6 +39,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
+import org.apache.ignite.internal.pagememory.persistence.GroupPartitionId;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -126,54 +128,54 @@ public class CheckpointProgressImplTest {
 
         assertTrue(progressImpl.greaterOrEqualTo(SCHEDULED));
         assertFalse(progressImpl.greaterOrEqualTo(LOCK_TAKEN));
-        assertFalse(progressImpl.greaterOrEqualTo(PAGE_SNAPSHOT_TAKEN));
+        assertFalse(progressImpl.greaterOrEqualTo(PAGES_SNAPSHOT_TAKEN));
         assertFalse(progressImpl.greaterOrEqualTo(LOCK_RELEASED));
-        assertFalse(progressImpl.greaterOrEqualTo(MARKER_STORED_TO_DISK));
+        assertFalse(progressImpl.greaterOrEqualTo(PAGES_SORTED));
         assertFalse(progressImpl.greaterOrEqualTo(FINISHED));
 
         progressImpl.transitTo(LOCK_TAKEN);
 
         assertTrue(progressImpl.greaterOrEqualTo(SCHEDULED));
         assertTrue(progressImpl.greaterOrEqualTo(LOCK_TAKEN));
-        assertFalse(progressImpl.greaterOrEqualTo(PAGE_SNAPSHOT_TAKEN));
+        assertFalse(progressImpl.greaterOrEqualTo(PAGES_SNAPSHOT_TAKEN));
         assertFalse(progressImpl.greaterOrEqualTo(LOCK_RELEASED));
-        assertFalse(progressImpl.greaterOrEqualTo(MARKER_STORED_TO_DISK));
+        assertFalse(progressImpl.greaterOrEqualTo(PAGES_SORTED));
         assertFalse(progressImpl.greaterOrEqualTo(FINISHED));
 
-        progressImpl.transitTo(PAGE_SNAPSHOT_TAKEN);
+        progressImpl.transitTo(PAGES_SNAPSHOT_TAKEN);
 
         assertTrue(progressImpl.greaterOrEqualTo(SCHEDULED));
         assertTrue(progressImpl.greaterOrEqualTo(LOCK_TAKEN));
-        assertTrue(progressImpl.greaterOrEqualTo(PAGE_SNAPSHOT_TAKEN));
+        assertTrue(progressImpl.greaterOrEqualTo(PAGES_SNAPSHOT_TAKEN));
         assertFalse(progressImpl.greaterOrEqualTo(LOCK_RELEASED));
-        assertFalse(progressImpl.greaterOrEqualTo(MARKER_STORED_TO_DISK));
+        assertFalse(progressImpl.greaterOrEqualTo(PAGES_SORTED));
         assertFalse(progressImpl.greaterOrEqualTo(FINISHED));
 
         progressImpl.transitTo(LOCK_RELEASED);
 
         assertTrue(progressImpl.greaterOrEqualTo(SCHEDULED));
         assertTrue(progressImpl.greaterOrEqualTo(LOCK_TAKEN));
-        assertTrue(progressImpl.greaterOrEqualTo(PAGE_SNAPSHOT_TAKEN));
+        assertTrue(progressImpl.greaterOrEqualTo(PAGES_SNAPSHOT_TAKEN));
         assertTrue(progressImpl.greaterOrEqualTo(LOCK_RELEASED));
-        assertFalse(progressImpl.greaterOrEqualTo(MARKER_STORED_TO_DISK));
+        assertFalse(progressImpl.greaterOrEqualTo(PAGES_SORTED));
         assertFalse(progressImpl.greaterOrEqualTo(FINISHED));
 
-        progressImpl.transitTo(MARKER_STORED_TO_DISK);
+        progressImpl.transitTo(PAGES_SORTED);
 
         assertTrue(progressImpl.greaterOrEqualTo(SCHEDULED));
         assertTrue(progressImpl.greaterOrEqualTo(LOCK_TAKEN));
-        assertTrue(progressImpl.greaterOrEqualTo(PAGE_SNAPSHOT_TAKEN));
+        assertTrue(progressImpl.greaterOrEqualTo(PAGES_SNAPSHOT_TAKEN));
         assertTrue(progressImpl.greaterOrEqualTo(LOCK_RELEASED));
-        assertTrue(progressImpl.greaterOrEqualTo(MARKER_STORED_TO_DISK));
+        assertTrue(progressImpl.greaterOrEqualTo(PAGES_SORTED));
         assertFalse(progressImpl.greaterOrEqualTo(FINISHED));
 
         progressImpl.transitTo(FINISHED);
 
         assertTrue(progressImpl.greaterOrEqualTo(SCHEDULED));
         assertTrue(progressImpl.greaterOrEqualTo(LOCK_TAKEN));
-        assertTrue(progressImpl.greaterOrEqualTo(PAGE_SNAPSHOT_TAKEN));
+        assertTrue(progressImpl.greaterOrEqualTo(PAGES_SNAPSHOT_TAKEN));
         assertTrue(progressImpl.greaterOrEqualTo(LOCK_RELEASED));
-        assertTrue(progressImpl.greaterOrEqualTo(MARKER_STORED_TO_DISK));
+        assertTrue(progressImpl.greaterOrEqualTo(PAGES_SORTED));
         assertTrue(progressImpl.greaterOrEqualTo(FINISHED));
     }
 
@@ -189,7 +191,10 @@ public class CheckpointProgressImplTest {
         progressImpl.transitTo(LOCK_RELEASED);
         assertTrue(progressImpl.inProgress());
 
-        progressImpl.transitTo(MARKER_STORED_TO_DISK);
+        progressImpl.transitTo(PAGES_SORTED);
+        assertTrue(progressImpl.inProgress());
+
+        progressImpl.transitTo(PAGES_SORTED);
         assertTrue(progressImpl.inProgress());
 
         progressImpl.transitTo(FINISHED);
@@ -200,7 +205,7 @@ public class CheckpointProgressImplTest {
     void testFail() {
         CheckpointProgressImpl progressImpl = new CheckpointProgressImpl(0);
 
-        CompletableFuture<?> future = progressImpl.futureFor(PAGE_SNAPSHOT_TAKEN);
+        CompletableFuture<?> future = progressImpl.futureFor(PAGES_SNAPSHOT_TAKEN);
 
         Exception failReason = new Exception("test");
 
@@ -229,11 +234,11 @@ public class CheckpointProgressImplTest {
         assertFalse(future1.isDone());
         assertSame(future1, progressImpl.futureFor(LOCK_TAKEN));
 
-        CompletableFuture<?> future2 = progressImpl.futureFor(PAGE_SNAPSHOT_TAKEN);
+        CompletableFuture<?> future2 = progressImpl.futureFor(PAGES_SNAPSHOT_TAKEN);
 
         assertNotNull(future2);
         assertFalse(future2.isDone());
-        assertSame(future2, progressImpl.futureFor(PAGE_SNAPSHOT_TAKEN));
+        assertSame(future2, progressImpl.futureFor(PAGES_SNAPSHOT_TAKEN));
 
         CompletableFuture<?> future3 = progressImpl.futureFor(LOCK_RELEASED);
 
@@ -241,11 +246,11 @@ public class CheckpointProgressImplTest {
         assertFalse(future3.isDone());
         assertSame(future3, progressImpl.futureFor(LOCK_RELEASED));
 
-        CompletableFuture<?> future4 = progressImpl.futureFor(MARKER_STORED_TO_DISK);
+        CompletableFuture<?> future4 = progressImpl.futureFor(PAGES_SORTED);
 
         assertNotNull(future4);
         assertFalse(future4.isDone());
-        assertSame(future4, progressImpl.futureFor(MARKER_STORED_TO_DISK));
+        assertSame(future4, progressImpl.futureFor(PAGES_SORTED));
 
         CompletableFuture<?> future5 = progressImpl.futureFor(FINISHED);
 
@@ -265,9 +270,9 @@ public class CheckpointProgressImplTest {
 
         assertSame(future0, progressImpl.futureFor(SCHEDULED));
         assertSame(future1, progressImpl.futureFor(LOCK_TAKEN));
-        assertSame(future2, progressImpl.futureFor(PAGE_SNAPSHOT_TAKEN));
+        assertSame(future2, progressImpl.futureFor(PAGES_SNAPSHOT_TAKEN));
         assertSame(future3, progressImpl.futureFor(LOCK_RELEASED));
-        assertSame(future4, progressImpl.futureFor(MARKER_STORED_TO_DISK));
+        assertSame(future4, progressImpl.futureFor(PAGES_SORTED));
         assertSame(future5, progressImpl.futureFor(FINISHED));
     }
 
@@ -287,21 +292,21 @@ public class CheckpointProgressImplTest {
 
         // Transit to PAGE_SNAPSHOT_TAKEN.
 
-        progressImpl.transitTo(PAGE_SNAPSHOT_TAKEN);
-        assertEquals(PAGE_SNAPSHOT_TAKEN, progressImpl.state());
+        progressImpl.transitTo(PAGES_SNAPSHOT_TAKEN);
+        assertEquals(PAGES_SNAPSHOT_TAKEN, progressImpl.state());
 
         progressImpl.transitTo(LOCK_TAKEN);
-        assertEquals(PAGE_SNAPSHOT_TAKEN, progressImpl.state());
+        assertEquals(PAGES_SNAPSHOT_TAKEN, progressImpl.state());
 
         progressImpl.transitTo(SCHEDULED);
-        assertEquals(PAGE_SNAPSHOT_TAKEN, progressImpl.state());
+        assertEquals(PAGES_SNAPSHOT_TAKEN, progressImpl.state());
 
         // Transit to LOCK_RELEASED.
 
         progressImpl.transitTo(LOCK_RELEASED);
         assertEquals(LOCK_RELEASED, progressImpl.state());
 
-        progressImpl.transitTo(PAGE_SNAPSHOT_TAKEN);
+        progressImpl.transitTo(PAGES_SNAPSHOT_TAKEN);
         assertEquals(LOCK_RELEASED, progressImpl.state());
 
         progressImpl.transitTo(LOCK_TAKEN);
@@ -310,35 +315,35 @@ public class CheckpointProgressImplTest {
         progressImpl.transitTo(SCHEDULED);
         assertEquals(LOCK_RELEASED, progressImpl.state());
 
-        // Transit to LOCK_RELEASED.
+        // Transit to PAGES_SORTED.
 
-        progressImpl.transitTo(MARKER_STORED_TO_DISK);
-        assertEquals(MARKER_STORED_TO_DISK, progressImpl.state());
+        progressImpl.transitTo(PAGES_SORTED);
+        assertEquals(PAGES_SORTED, progressImpl.state());
 
         progressImpl.transitTo(LOCK_RELEASED);
-        assertEquals(MARKER_STORED_TO_DISK, progressImpl.state());
+        assertEquals(PAGES_SORTED, progressImpl.state());
 
-        progressImpl.transitTo(PAGE_SNAPSHOT_TAKEN);
-        assertEquals(MARKER_STORED_TO_DISK, progressImpl.state());
+        progressImpl.transitTo(PAGES_SNAPSHOT_TAKEN);
+        assertEquals(PAGES_SORTED, progressImpl.state());
 
         progressImpl.transitTo(LOCK_TAKEN);
-        assertEquals(MARKER_STORED_TO_DISK, progressImpl.state());
+        assertEquals(PAGES_SORTED, progressImpl.state());
 
         progressImpl.transitTo(SCHEDULED);
-        assertEquals(MARKER_STORED_TO_DISK, progressImpl.state());
+        assertEquals(PAGES_SORTED, progressImpl.state());
 
         // Transit to FINISHED.
 
         progressImpl.transitTo(FINISHED);
         assertEquals(FINISHED, progressImpl.state());
 
-        progressImpl.transitTo(MARKER_STORED_TO_DISK);
+        progressImpl.transitTo(PAGES_SORTED);
         assertEquals(FINISHED, progressImpl.state());
 
         progressImpl.transitTo(LOCK_RELEASED);
         assertEquals(FINISHED, progressImpl.state());
 
-        progressImpl.transitTo(PAGE_SNAPSHOT_TAKEN);
+        progressImpl.transitTo(PAGES_SNAPSHOT_TAKEN);
         assertEquals(FINISHED, progressImpl.state());
 
         progressImpl.transitTo(LOCK_TAKEN);
@@ -346,5 +351,66 @@ public class CheckpointProgressImplTest {
 
         progressImpl.transitTo(SCHEDULED);
         assertEquals(FINISHED, progressImpl.state());
+    }
+
+    @Test
+    void testPagesToWrite() {
+        CheckpointProgressImpl progressImpl = new CheckpointProgressImpl(0);
+
+        assertNull(progressImpl.pagesToWrite());
+
+        progressImpl.pagesToWrite(CheckpointDirtyPages.EMPTY);
+
+        assertSame(CheckpointDirtyPages.EMPTY, progressImpl.pagesToWrite());
+
+        progressImpl.pagesToWrite(null);
+
+        assertNull(progressImpl.pagesToWrite());
+    }
+
+    @Test
+    void testProcessedPartition() {
+        CheckpointProgressImpl progressImpl = new CheckpointProgressImpl(0);
+
+        GroupPartitionId groupPartitionId = new GroupPartitionId(0, 0);
+
+        assertNull(progressImpl.getProcessedPartitionFuture(groupPartitionId));
+
+        progressImpl.onStartPartitionProcessing(groupPartitionId);
+
+        CompletableFuture<Void> processedPartitionFuture0 = progressImpl.getProcessedPartitionFuture(groupPartitionId);
+
+        assertNotNull(processedPartitionFuture0);
+        assertFalse(processedPartitionFuture0.isDone());
+
+        progressImpl.onStartPartitionProcessing(groupPartitionId);
+
+        assertSame(processedPartitionFuture0, progressImpl.getProcessedPartitionFuture(groupPartitionId));
+        assertFalse(processedPartitionFuture0.isDone());
+
+        progressImpl.onFinishPartitionProcessing(groupPartitionId);
+
+        assertSame(processedPartitionFuture0, progressImpl.getProcessedPartitionFuture(groupPartitionId));
+        assertFalse(processedPartitionFuture0.isDone());
+
+        progressImpl.onFinishPartitionProcessing(groupPartitionId);
+
+        assertNull(progressImpl.getProcessedPartitionFuture(groupPartitionId));
+        assertTrue(processedPartitionFuture0.isDone());
+
+        // Let's check the reprocessing of the partition.
+
+        progressImpl.onStartPartitionProcessing(groupPartitionId);
+
+        CompletableFuture<Void> processedPartitionFuture1 = progressImpl.getProcessedPartitionFuture(groupPartitionId);
+
+        assertNotNull(processedPartitionFuture1);
+        assertFalse(processedPartitionFuture1.isDone());
+        assertNotSame(processedPartitionFuture0, processedPartitionFuture1);
+
+        progressImpl.onFinishPartitionProcessing(groupPartitionId);
+
+        assertNull(progressImpl.getProcessedPartitionFuture(groupPartitionId));
+        assertTrue(processedPartitionFuture1.isDone());
     }
 }

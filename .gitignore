@@ -1,7 +1,33 @@
-.idea
-*.iml
-target
 work
 .DS_Store
 .flattened-pom.xml
+
+.classpath
+.project
+.settings
+
+.gradle
+build/
+!gradle/wrapper/gradle-wrapper.jar
+
+### IntelliJ IDEA ###
+.idea
+!.idea/codeStyles/codeStyleConfig.xml
+!.idea/codeStyles/Project.xml
+!.idea/checkstyle-idea.xml
+!.idea/inspectionProfiles/Project_Default.xml
+*.iws
+*.iml
+*.ipr
+out/
+
+modules/platforms/cpp/cmake-build-*
+
+# JVM crash dumps
+**/hs_err_pid*
+
+# OpenAPI spec file
+modules/rest-api/openapi/openapi.*
+
+# NonDex generated files
 .nondex

@@ -1,12 +1,12 @@
 /*
  * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
+ * contributor license agreements. See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.
  * The ASF licenses this file to You under the Apache License, Version 2.0
  * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+ * the License. You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *      http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -22,7 +22,8 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
-import org.apache.ignite.lang.IgniteLogger;
+import org.apache.ignite.internal.logger.IgniteLogger;
+import org.apache.ignite.internal.logger.Loggers;
 import org.apache.ignite.raft.jraft.Closure;
 import org.apache.ignite.raft.jraft.FSMCaller;
 import org.apache.ignite.raft.jraft.RaftMessagesFactory;
@@ -54,7 +55,7 @@ import org.apache.ignite.raft.jraft.util.Utils;
  * Snapshot executor implementation.
  */
 public class SnapshotExecutorImpl implements SnapshotExecutor {
-    private static final IgniteLogger LOG = IgniteLogger.forClass(SnapshotExecutorImpl.class);
+    private static final IgniteLogger LOG = Loggers.forClass(SnapshotExecutorImpl.class);
 
     private final Lock lock = new ReentrantLock();
 
@@ -99,10 +100,7 @@ public class SnapshotExecutorImpl implements SnapshotExecutor {
         return this.lastSnapshotTerm;
     }
 
-    /**
-     * Only for test
-     */
-    @OnlyForTest
+    @Override
     public long getLastSnapshotIndex() {
         return this.lastSnapshotIndex;
     }
@@ -227,9 +225,11 @@ public class SnapshotExecutorImpl implements SnapshotExecutor {
             LOG.error("Fail to init snapshot storage.");
             return false;
         }
-        final LocalSnapshotStorage tmp = (LocalSnapshotStorage) this.snapshotStorage;
-        if (tmp != null && !tmp.hasServerAddr()) {
-            tmp.setServerAddr(opts.getAddr());
+        if (snapshotStorage instanceof LocalSnapshotStorage) {
+            final LocalSnapshotStorage tmp = (LocalSnapshotStorage) this.snapshotStorage;
+            if (!tmp.hasServerPeerId()) {
+                tmp.setServerPeerId(opts.getPeerId());
+            }
         }
         final SnapshotReader reader = this.snapshotStorage.open();
         if (reader == null) {
@@ -602,7 +602,7 @@ public class SnapshotExecutorImpl implements SnapshotExecutor {
                 // this RPC.
                 saved = m;
                 this.downloadingSnapshot.set(ds);
-                result = false;
+                result = true;
             }
             else if (m.request.meta().lastIncludedIndex() > ds.request.meta().lastIncludedIndex()) {
                 // |is| is older
@@ -639,7 +639,7 @@ public class SnapshotExecutorImpl implements SnapshotExecutor {
         }
         if (saved != null) {
             // Respond replaced session
-            LOG.warn("Register DownloadingSnapshot failed: interrupted by retry installling request.");
+            LOG.warn("Register DownloadingSnapshot failed: interrupted by retry installing request.");
             saved.done.sendResponse(RaftRpcFactory.DEFAULT //
                 .newResponse(msgFactory, RaftError.EINTR,
                     "Interrupted by the retry InstallSnapshotRequest"));

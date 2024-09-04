@@ -1,10 +1,10 @@
 /*
  * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
+ * contributor license agreements. See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.
  * The ASF licenses this file to You under the Apache License, Version 2.0
  * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+ * the License. You may obtain a copy of the License at
  *
  *      http://www.apache.org/licenses/LICENSE-2.0
  *
@@ -18,7 +18,7 @@
 package org.apache.ignite.client.fakes;
 
 import org.apache.ignite.sql.ColumnMetadata;
-import org.apache.ignite.sql.SqlColumnType;
+import org.apache.ignite.sql.ColumnType;
 
 /**
  * Fake column meta.
@@ -26,13 +26,36 @@ import org.apache.ignite.sql.SqlColumnType;
 class FakeColumnMetadata implements ColumnMetadata {
     private final String name;
 
-    /**
-     * Constructor.
-     *
-     * @param name Column name.
-     */
-    FakeColumnMetadata(String name) {
+    private final ColumnType type;
+
+    private final int precision;
+
+    private final int scale;
+
+    private final boolean nullable;
+
+    private final ColumnOrigin origin;
+
+    FakeColumnMetadata(String name, ColumnType type) {
+        this(name, type, ColumnMetadata.UNDEFINED_PRECISION, ColumnMetadata.UNDEFINED_SCALE, false, null);
+    }
+
+    FakeColumnMetadata(
+            String name,
+            ColumnType type,
+            int precision,
+            int scale,
+            boolean nullable,
+            ColumnOrigin origin) {
+        assert name != null;
+        assert type != null;
+
         this.name = name;
+        this.type = type;
+        this.precision = precision;
+        this.scale = scale;
+        this.nullable = nullable;
+        this.origin = origin;
     }
 
     /** {@inheritDoc} */
@@ -49,31 +72,31 @@ class FakeColumnMetadata implements ColumnMetadata {
 
     /** {@inheritDoc} */
     @Override
-    public SqlColumnType type() {
-        return null;
+    public ColumnType type() {
+        return type;
     }
 
     /** {@inheritDoc} */
     @Override
     public int precision() {
-        return -1;
+        return precision;
     }
 
     /** {@inheritDoc} */
     @Override
     public int scale() {
-        return -1;
+        return scale;
     }
 
     /** {@inheritDoc} */
     @Override
     public boolean nullable() {
-        return false;
+        return nullable;
     }
 
     /** {@inheritDoc} */
     @Override
     public ColumnOrigin origin() {
-        return null;
+        return origin;
     }
 }

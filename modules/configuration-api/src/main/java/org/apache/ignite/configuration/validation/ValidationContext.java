@@ -1,10 +1,10 @@
 /*
  * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
+ * contributor license agreements. See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.
  * The ASF licenses this file to You under the Apache License, Version 2.0
  * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+ * the License. You may obtain a copy of the License at
  *
  *      http://www.apache.org/licenses/LICENSE-2.0
  *
@@ -55,7 +55,7 @@ public interface ValidationContext<VIEWT> {
      * @param rootKey Root key.
      * @param <ROOT>  Root view type derived from the root key.
      */
-    @Nullable <ROOT> ROOT getOldRoot(RootKey<?, ROOT> rootKey);
+    <ROOT> @Nullable ROOT getOldRoot(RootKey<?, ROOT> rootKey);
 
     /**
      * Returns updated value of the configuration root.
@@ -63,7 +63,7 @@ public interface ValidationContext<VIEWT> {
      * @param rootKey Root key.
      * @param <ROOT>  Root view type derived from the root key.
      */
-    @Nullable <ROOT> ROOT getNewRoot(RootKey<?, ROOT> rootKey);
+    <ROOT> @Nullable ROOT getNewRoot(RootKey<?, ROOT> rootKey);
 
     /**
      * Signifies that there's something wrong. Values will be accumulated and passed to the user later.
@@ -72,4 +72,24 @@ public interface ValidationContext<VIEWT> {
      * @see ConfigurationValidationException
      */
     void addIssue(ValidationIssue issue);
+
+    /**
+     * Returns a previous view of the owner of the current value.
+     *
+     * <p>For primitives/nested configuration/named list, the owner is the configuration in which they are declared, for example {@code
+     * TableView} will be returned for the string field, {@code null} will be returned for the root configuration.
+     *
+     * @param <T> Owner view type.
+     */
+    <T> @Nullable T getOldOwner();
+
+    /**
+     * Returns the updated view of the owner of the current value.
+     *
+     * <p>For primitives/nested configuration/named list, the owner is the configuration in which they are declared, for example {@code
+     * TableView} will be returned for the string field, {@code null} will be returned for the root configuration.
+     *
+     * @param <T> Owner view type.
+     */
+    <T> @Nullable T getNewOwner();
 }

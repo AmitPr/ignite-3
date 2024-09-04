@@ -1,12 +1,12 @@
 /*
  * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
+ * contributor license agreements. See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.
  * The ASF licenses this file to You under the Apache License, Version 2.0
  * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+ * the License. You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *      http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -19,7 +19,9 @@ package org.apache.ignite.raft.jraft.storage.snapshot.local;
 import java.io.File;
 import java.io.IOException;
 import java.util.Set;
-import org.apache.ignite.lang.IgniteLogger;
+import org.apache.ignite.internal.logger.IgniteLogger;
+import org.apache.ignite.internal.logger.Loggers;
+import org.apache.ignite.raft.jraft.entity.PeerId;
 import org.apache.ignite.raft.jraft.entity.RaftOutter.SnapshotMeta;
 import org.apache.ignite.raft.jraft.error.RaftError;
 import org.apache.ignite.raft.jraft.option.RaftOptions;
@@ -27,7 +29,6 @@ import org.apache.ignite.raft.jraft.rpc.Message;
 import org.apache.ignite.raft.jraft.storage.FileService;
 import org.apache.ignite.raft.jraft.storage.SnapshotThrottle;
 import org.apache.ignite.raft.jraft.storage.snapshot.SnapshotReader;
-import org.apache.ignite.raft.jraft.util.Endpoint;
 import org.apache.ignite.raft.jraft.util.OnlyForTest;
 import org.apache.ignite.raft.jraft.util.Utils;
 
@@ -35,12 +36,12 @@ import org.apache.ignite.raft.jraft.util.Utils;
  * Snapshot reader on local file system.
  */
 public class LocalSnapshotReader extends SnapshotReader {
-    private static final IgniteLogger LOG = IgniteLogger.forClass(LocalSnapshotReader.class);
+    private static final IgniteLogger LOG = Loggers.forClass(LocalSnapshotReader.class);
 
     /** Generated reader id */
     private long readerId;
-    /** remote peer addr */
-    private final Endpoint addr;
+    /** remote peer ID */
+    private final PeerId peerId;
     private final LocalSnapshotMetaTable metaTable;
     private final String path;
     private final LocalSnapshotStorage snapshotStorage;
@@ -52,12 +53,12 @@ public class LocalSnapshotReader extends SnapshotReader {
         this.destroyReaderInFileService();
     }
 
-    public LocalSnapshotReader(LocalSnapshotStorage snapshotStorage, SnapshotThrottle snapshotThrottle, Endpoint addr,
+    public LocalSnapshotReader(LocalSnapshotStorage snapshotStorage, SnapshotThrottle snapshotThrottle, PeerId peerId,
         RaftOptions raftOptions, String path) {
         super();
         this.snapshotStorage = snapshotStorage;
         this.snapshotThrottle = snapshotThrottle;
-        this.addr = addr;
+        this.peerId = peerId;
         this.path = path;
         this.readerId = 0;
         this.metaTable = new LocalSnapshotMetaTable(raftOptions);
@@ -81,7 +82,7 @@ public class LocalSnapshotReader extends SnapshotReader {
             return this.metaTable.loadFromFile(metaPath);
         }
         catch (final IOException e) {
-            LOG.error("Fail to load snapshot meta {}.", metaPath);
+            LOG.error("Fail to load snapshot meta {}.", metaPath, e);
             setError(RaftError.EIO, "Fail to load snapshot meta from path %s", metaPath);
             return false;
         }
@@ -111,8 +112,8 @@ public class LocalSnapshotReader extends SnapshotReader {
 
     @Override
     public String generateURIForCopy() {
-        if (this.addr == null || this.addr.equals(new Endpoint(Utils.IP_ANY, 0))) {
-            LOG.error("Address is not specified");
+        if (this.peerId == null || this.peerId.isEmpty()) {
+            LOG.error("Peer ID is not specified");
             return null;
         }
         if (this.readerId == 0) {
@@ -129,7 +130,7 @@ public class LocalSnapshotReader extends SnapshotReader {
             }
         }
 
-        return String.format(REMOTE_SNAPSHOT_URI_SCHEME + "%s/%d", this.addr.toString(), this.readerId);
+        return String.format(REMOTE_SNAPSHOT_URI_SCHEME + "%s/%d", this.peerId, this.readerId);
     }
 
     private void destroyReaderInFileService() {

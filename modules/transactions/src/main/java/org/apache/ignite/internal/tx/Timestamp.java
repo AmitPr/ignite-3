@@ -1,10 +1,10 @@
 /*
  * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
+ * contributor license agreements. See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.
  * The ASF licenses this file to You under the Apache License, Version 2.0
  * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+ * the License. You may obtain a copy of the License at
  *
  *      http://www.apache.org/licenses/LICENSE-2.0
  *
@@ -27,7 +27,6 @@ import java.time.ZoneOffset;
 import java.util.UUID;
 import java.util.concurrent.ThreadLocalRandom;
 import org.apache.ignite.lang.IgniteException;
-import org.jetbrains.annotations.NotNull;
 
 /**
  * A timestamp implementation. Timestamps are used to order transactions and perform conflict resolution.
@@ -72,9 +71,19 @@ public class Timestamp implements Comparable<Timestamp>, Serializable {
         this.nodeId = nodeId;
     }
 
+    /**
+     * The constructor.
+     *
+     * @param txId Transaction id.
+     */
+    public Timestamp(UUID txId) {
+        this.timestamp = txId.getMostSignificantBits();
+        this.nodeId = txId.getLeastSignificantBits();
+    }
+
     /** {@inheritDoc} */
     @Override
-    public int compareTo(@NotNull Timestamp other) {
+    public int compareTo(Timestamp other) {
         return (this.timestamp < other.timestamp ? -1 : (this.timestamp > other.timestamp ? 1 :
                 Long.compare(this.nodeId, other.nodeId)));
     }
@@ -149,6 +158,15 @@ public class Timestamp implements Comparable<Timestamp>, Serializable {
 
         // Will overflow in a late future.
         return new Timestamp(newTime << 16 | cntr, localNodeId);
+    }
+
+    /**
+     * Converts to {@link UUID}.
+     *
+     * @return Id.
+     */
+    public UUID toUuid() {
+        return new UUID(timestamp, nodeId);
     }
 
     /**

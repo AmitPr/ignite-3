@@ -4,7 +4,7 @@
  * this work for additional information regarding copyright ownership.
  * The ASF licenses this file to You under the Apache License, Version 2.0
  * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+ * the License. You may obtain a copy of the License at
  *
  *      http://www.apache.org/licenses/LICENSE-2.0
  *
@@ -18,90 +18,80 @@
 package org.apache.ignite.internal.cluster.management;
 
 import java.io.Serializable;
-import java.util.Collection;
-import java.util.Objects;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Set;
+import java.util.UUID;
+import org.apache.ignite.internal.cluster.management.network.messages.CmgMessageGroup;
+import org.apache.ignite.internal.network.NetworkMessage;
+import org.apache.ignite.internal.network.annotations.Transferable;
 import org.apache.ignite.internal.properties.IgniteProductVersion;
+import org.jetbrains.annotations.Nullable;
 
 /**
  * Represents the state of the CMG. It contains:
  * <ol>
- *     <li>Names of the nodes that host the Meta Storage.</li>
+ *     <li>Names of the nodes that host Meta storage.</li>
  *     <li>Names of the nodes that host the CMG.</li>
  *     <li>Ignite version of the nodes that comprise the cluster.</li>
  *     <li>Cluster tag, unique for a particular Ignite cluster.</li>
  * </ol>
  */
-public final class ClusterState implements Serializable {
-    private final Set<String> cmgNodes;
-
-    private final Set<String> msNodes;
-
-    private final IgniteProductVersion igniteVersion;
-
-    private final ClusterTag clusterTag;
+@Transferable(CmgMessageGroup.Commands.CLUSTER_STATE)
+public interface ClusterState extends NetworkMessage, Serializable {
+    /**
+     * Returns node names that host the CMG.
+     */
+    Set<String> cmgNodes();
 
     /**
-     * Creates a new cluster state.
-     *
-     * @param cmgNodes Node names that host the CMG.
-     * @param metaStorageNodes Node names that host the Meta Storage.
-     * @param igniteVersion Version of Ignite nodes that comprise this cluster.
-     * @param clusterTag Cluster tag.
+     * Returns node names that host Meta storage.
      */
-    public ClusterState(
-            Collection<String> cmgNodes,
-            Collection<String> metaStorageNodes,
-            IgniteProductVersion igniteVersion,
-            ClusterTag clusterTag
-    ) {
-        this.cmgNodes = Set.copyOf(cmgNodes);
-        this.msNodes = Set.copyOf(metaStorageNodes);
-        this.igniteVersion = igniteVersion;
-        this.clusterTag = clusterTag;
+    Set<String> metaStorageNodes();
+
+    /**
+     * Returns a version of Ignite nodes that comprise this cluster.
+     */
+    String version();
+
+    /**
+     * Returns a cluster tag.
+     */
+    ClusterTag clusterTag();
+
+    /**
+     * Returns a version of Ignite nodes that comprise this cluster.
+     */
+    default IgniteProductVersion igniteVersion() {
+        return IgniteProductVersion.fromString(version());
     }
 
-    public Set<String> cmgNodes() {
-        return cmgNodes;
-    }
+    /**
+     * Returns initial cluster configuration.
+     */
+    @Nullable
+    String initialClusterConfiguration();
 
-    public Set<String> metaStorageNodes() {
-        return msNodes;
-    }
+    /**
+     * Returns IDs this cluster had before ({@code null} if this is the first incarnation).
+     */
+    @Nullable
+    List<UUID> formerClusterIds();
 
-    public IgniteProductVersion igniteVersion() {
-        return igniteVersion;
-    }
+    /**
+     * Returns history of cluster IDs (oldest to newest). Last element is the current ID. Contains at least one element.
+     */
+    default List<UUID> clusterIdHistory() {
+        List<UUID> formerClusterIds = formerClusterIds();
+        UUID currentClusterId = clusterTag().clusterId();
 
-    public ClusterTag clusterTag() {
-        return clusterTag;
-    }
-
-    @Override
-    public boolean equals(Object o) {
-        if (this == o) {
-            return true;
+        if (formerClusterIds == null) {
+            return List.of(currentClusterId);
         }
-        if (o == null || getClass() != o.getClass()) {
-            return false;
-        }
-        ClusterState state = (ClusterState) o;
-        return cmgNodes.equals(state.cmgNodes) && msNodes.equals(state.msNodes) && igniteVersion.equals(state.igniteVersion)
-                && clusterTag.equals(state.clusterTag);
-    }
 
-    @Override
-    public int hashCode() {
-        return Objects.hash(cmgNodes, msNodes, igniteVersion, clusterTag);
-    }
+        List<UUID> history = new ArrayList<>(formerClusterIds);
+        history.add(currentClusterId);
 
-    @Override
-    public String toString() {
-        return "ClusterState{"
-                + "cmgNodes=" + cmgNodes
-                + ", msNodes=" + msNodes
-                + ", igniteVersion=" + igniteVersion
-                + ", clusterTag=" + clusterTag
-                + '}';
+        return history;
     }
 }

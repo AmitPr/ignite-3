@@ -4,7 +4,7 @@
  * this work for additional information regarding copyright ownership.
  * The ASF licenses this file to You under the Apache License, Version 2.0
  * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+ * the License. You may obtain a copy of the License at
  *
  *      http://www.apache.org/licenses/LICENSE-2.0
  *
@@ -25,9 +25,10 @@ import java.util.Collection;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
+import java.util.function.Function;
+import org.apache.ignite.internal.lang.IgniteInternalException;
 import org.apache.ignite.internal.rocksdb.RocksUtils;
 import org.apache.ignite.internal.util.IgniteUtils;
-import org.apache.ignite.lang.IgniteInternalException;
 import org.rocksdb.EnvOptions;
 import org.rocksdb.IngestExternalFileOptions;
 import org.rocksdb.Options;
@@ -77,8 +78,11 @@ public class RocksSnapshotManager {
     public CompletableFuture<Void> createSnapshot(Path snapshotDir) {
         Path tmpPath = Paths.get(snapshotDir.toString() + TMP_SUFFIX);
 
-        return CompletableFuture.supplyAsync(db::getSnapshot, executor)
-                .thenComposeAsync(snapshot -> {
+        // The snapshot reference must be taken synchronously, otherwise we might let more writes sneak into the snapshot than needed.
+        Snapshot snapshot = db.getSnapshot();
+
+        return CompletableFuture.supplyAsync(
+                () -> {
                     createTmpSnapshotDir(tmpPath);
 
                     // Create futures for capturing SST snapshots of the column families
@@ -86,18 +90,19 @@ public class RocksSnapshotManager {
                             .map(cf -> createSstFileAsync(cf, snapshot, tmpPath))
                             .toArray(CompletableFuture[]::new);
 
-                    return CompletableFuture.allOf(sstFutures).thenApply(v -> snapshot);
+                    return CompletableFuture.allOf(sstFutures);
                 }, executor)
-                .whenCompleteAsync((snapshot, e) -> {
-                    if (e != null) {
-                        return;
-                    }
-
+                .thenCompose(Function.identity())
+                .whenCompleteAsync((ignored, e) -> {
                     db.releaseSnapshot(snapshot);
 
                     // Snapshot is not actually closed here, because a Snapshot instance doesn't own a pointer, the
                     // database does. Calling close to maintain the AutoCloseable semantics
                     snapshot.close();
+
+                    if (e != null) {
+                        return;
+                    }
 
                     // Delete snapshot directory if it already exists
                     IgniteUtils.deleteIfExists(snapshotDir);
@@ -145,10 +150,10 @@ public class RocksSnapshotManager {
      * @param snapshot Point-in-time snapshot.
      * @param snapshotDir Directory to put the SST file in.
      */
-    private static void createSstFile(ColumnFamilyRange range, Snapshot snapshot, Path snapshotDir) {
+    private void createSstFile(ColumnFamilyRange range, Snapshot snapshot, Path snapshotDir) {
         try (
                 EnvOptions envOptions = new EnvOptions();
-                Options options = new Options();
+                Options options = new Options().setEnv(db.getEnv());
                 SstFileWriter sstFileWriter = new SstFileWriter(envOptions, options);
                 RocksIterator it = snapshotIterator(range, snapshot)
         ) {

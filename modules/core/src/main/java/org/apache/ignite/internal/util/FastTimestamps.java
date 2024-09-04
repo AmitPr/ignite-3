@@ -1,10 +1,10 @@
 /*
  * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
+ * contributor license agreements. See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.
  * The ASF licenses this file to You under the Apache License, Version 2.0
  * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+ * the License. You may obtain a copy of the License at
  *
  *      http://www.apache.org/licenses/LICENSE-2.0
  *
@@ -23,7 +23,8 @@ package org.apache.ignite.internal.util;
 public class FastTimestamps {
     private static volatile long coarseCurrentTimeMillis = System.currentTimeMillis();
 
-    private static final long UPDATE_FREQUENCY_MS = 10;
+    /** Note: don't change this value, because it's crucial for a timestamp generation. */
+    private static final long UPDATE_INTERVAL_MS = 1;
 
     static {
         startUpdater();
@@ -37,7 +38,7 @@ public class FastTimestamps {
                 while (true) {
                     coarseCurrentTimeMillis = System.currentTimeMillis();
                     try {
-                        Thread.sleep(UPDATE_FREQUENCY_MS);
+                        Thread.sleep(UPDATE_INTERVAL_MS);
                     } catch (InterruptedException e) {
                         break;
                     }
@@ -46,7 +47,7 @@ public class FastTimestamps {
         };
 
         updater.setDaemon(true);
-        updater.setPriority(10);
+        updater.setPriority(Thread.MAX_PRIORITY);
         updater.start();
     }
 

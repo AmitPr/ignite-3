@@ -1,12 +1,12 @@
 /*
  * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
+ * contributor license agreements. See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to you under the Apache License, Version 2.0
+ * The ASF licenses this file to You under the Apache License, Version 2.0
  * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+ * the License. You may obtain a copy of the License at
  *
- * http://www.apache.org/licenses/LICENSE-2.0
+ *      http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -21,7 +21,7 @@ import java.lang.reflect.Modifier;
 import java.lang.reflect.Type;
 import java.util.List;
 import org.apache.calcite.DataContext;
-import org.apache.calcite.adapter.java.JavaTypeFactory;
+import org.apache.calcite.adapter.enumerable.EnumUtils;
 import org.apache.calcite.config.CalciteSystemProperty;
 import org.apache.calcite.jdbc.JavaTypeFactoryImpl;
 import org.apache.calcite.linq4j.tree.BlockBuilder;
@@ -98,9 +98,10 @@ public class RexExecutorImpl implements RexExecutor {
 
         final SqlConformance conformance = SqlConformanceEnum.DEFAULT;
         final RexProgram program = programBuilder.getProgram();
+
         final List<Expression> expressions =
-                RexToLixTranslator.translateProjects(program, javaTypeFactory,
-                        conformance, blockBuilder, null, root_, getter, null);
+                RexToLixTranslator.translateProjects(program,  javaTypeFactory,
+                        conformance, blockBuilder, null, null, root_, getter, null);
 
         blockBuilder.add(
                 Expressions.return_(
@@ -192,20 +193,12 @@ public class RexExecutorImpl implements RexExecutor {
                     BuiltInMethod.DATA_CONTEXT_GET.method,
                     Expressions.constant("inputRecord"));
 
-            Expression recFromCtxCasted =
-                    ConverterUtils.convert(recFromCtx, Object[].class);
+            Expression recFromCtxCasted = EnumUtils.convert(recFromCtx, Object[].class);
 
             IndexExpression recordAccess = Expressions.arrayIndex(recFromCtxCasted,
                     Expressions.constant(idx));
-
-            if (storageType == null) {
-                final RelDataType fieldType =
-                        rowType.getFieldList().get(idx).getType();
-
-                storageType = ((JavaTypeFactory) typeFactory).getJavaClass(fieldType);
-            }
-
-            return ConverterUtils.convert(recordAccess, storageType);
+            RelDataType fieldType =  rowType.getFieldList().get(idx).getType();
+            return ConverterUtils.convert(recordAccess, fieldType);
         }
     }
 }

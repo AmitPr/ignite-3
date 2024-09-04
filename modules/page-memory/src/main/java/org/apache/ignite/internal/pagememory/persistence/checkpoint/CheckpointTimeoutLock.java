@@ -1,10 +1,10 @@
 /*
  * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
+ * contributor license agreements. See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.
  * The ASF licenses this file to You under the Apache License, Version 2.0
  * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+ * the License. You may obtain a copy of the License at
  *
  *      http://www.apache.org/licenses/LICENSE-2.0
  *
@@ -18,32 +18,36 @@
 package org.apache.ignite.internal.pagememory.persistence.checkpoint;
 
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
+import static org.apache.ignite.internal.failure.FailureType.SYSTEM_CRITICAL_OPERATION_TIMEOUT;
 import static org.apache.ignite.internal.pagememory.persistence.checkpoint.CheckpointState.LOCK_RELEASED;
 import static org.apache.ignite.internal.util.FastTimestamps.coarseCurrentTimeMillis;
 import static org.apache.ignite.internal.util.IgniteUtils.getUninterruptibly;
+import static org.apache.ignite.lang.ErrorGroups.CriticalWorkers.SYSTEM_CRITICAL_OPERATION_TIMEOUT_ERR;
 
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.ExecutionException;
-import java.util.function.BooleanSupplier;
-import org.apache.ignite.internal.manager.IgniteComponent;
-import org.apache.ignite.internal.pagememory.persistence.PageMemoryImpl;
-import org.apache.ignite.lang.IgniteInternalException;
-import org.apache.ignite.lang.IgniteLogger;
-import org.apache.ignite.lang.NodeStoppingException;
+import java.util.function.Supplier;
+import org.apache.ignite.internal.failure.FailureContext;
+import org.apache.ignite.internal.failure.FailureProcessor;
+import org.apache.ignite.internal.lang.IgniteInternalException;
+import org.apache.ignite.internal.lang.NodeStoppingException;
+import org.apache.ignite.internal.logger.IgniteLogger;
+import org.apache.ignite.internal.logger.Loggers;
+import org.apache.ignite.internal.pagememory.persistence.CheckpointUrgency;
+import org.apache.ignite.internal.pagememory.persistence.PersistentPageMemory;
 
 /**
  * Checkpoint lock for outer usage which should be used to protect data during writing to memory. It contains complex logic for the correct
  * taking of inside checkpoint lock(timeout, force checkpoint, etc.).
  */
-public class CheckpointTimeoutLock implements IgniteComponent {
-    /** Ignite logger. */
-    protected final IgniteLogger log;
+public class CheckpointTimeoutLock {
+    /** Logger. */
+    protected static final IgniteLogger LOG = Loggers.forClass(CheckpointTimeoutLock.class);
 
     /**
-     * {@link PageMemoryImpl#safeToUpdate() Safe update check} for all page memories, should return {@code false} if there are many dirty
-     * pages and a checkpoint is needed.
+     * {@link PersistentPageMemory#checkpointUrgency()}  Checkpoint urgency check} for all page memories.
      */
-    private final BooleanSupplier safeToUpdateAllPageMemories;
+    private final Supplier<CheckpointUrgency> urgencySupplier;
 
     /** Internal checkpoint lock. */
     private final CheckpointReadWriteLock checkpointReadWriteLock;
@@ -57,38 +61,41 @@ public class CheckpointTimeoutLock implements IgniteComponent {
     /** Stop flag. */
     private boolean stop;
 
+    /** Failure processor. */
+    private final FailureProcessor failureProcessor;
+
     /**
      * Constructor.
      *
-     * @param log Logger.
      * @param checkpointReadWriteLock Checkpoint read-write lock.
      * @param checkpointReadLockTimeout Timeout for checkpoint read lock acquisition in milliseconds.
-     * @param safeToUpdateAllPageMemories {@link PageMemoryImpl#safeToUpdate() Safe update check} for all page memories, should return
-     *      {@code false} if there are many dirty pages and a checkpoint is needed.
+     * @param urgencySupplier {@link PersistentPageMemory#checkpointUrgency()}  Checkpoint urgency check} for all page memories.
      * @param checkpointer Service for triggering the checkpoint.
      */
     public CheckpointTimeoutLock(
-            IgniteLogger log,
             CheckpointReadWriteLock checkpointReadWriteLock,
             long checkpointReadLockTimeout,
-            BooleanSupplier safeToUpdateAllPageMemories,
-            Checkpointer checkpointer
+            Supplier<CheckpointUrgency> urgencySupplier,
+            Checkpointer checkpointer,
+            FailureProcessor failureProcessor
     ) {
-        this.log = log;
         this.checkpointReadWriteLock = checkpointReadWriteLock;
         this.checkpointReadLockTimeout = checkpointReadLockTimeout;
-        this.safeToUpdateAllPageMemories = safeToUpdateAllPageMemories;
+        this.urgencySupplier = urgencySupplier;
         this.checkpointer = checkpointer;
+        this.failureProcessor = failureProcessor;
     }
 
-    /** {@inheritDoc} */
-    @Override
+    /**
+     * Starts a checkpoint lock.
+     */
     public void start() {
         stop = false;
     }
 
-    /** {@inheritDoc} */
-    @Override
+    /**
+     * Stops a checkpoint lock.
+     */
     public void stop() {
         checkpointReadWriteLock.writeLock();
 
@@ -143,16 +150,25 @@ public class CheckpointTimeoutLock implements IgniteComponent {
                         throw new IgniteInternalException(new NodeStoppingException("Failed to get checkpoint read lock"));
                     }
 
+                    CheckpointUrgency urgency;
+
                     if (checkpointReadWriteLock.getReadHoldCount() > 1
-                            || safeToUpdateAllPageMemories.getAsBoolean()
                             || checkpointer.runner() == null
+                            || (urgency = urgencySupplier.get()) == CheckpointUrgency.NOT_REQUIRED
                     ) {
-                        break;
+                        return;
                     } else {
                         // If the checkpoint is triggered outside the lock,
                         // it could cause the checkpoint to fire again for the same reason
                         // (due to a data race between collecting dirty pages and triggering the checkpoint).
                         CheckpointProgress checkpoint = checkpointer.scheduleCheckpoint(0, "too many dirty pages");
+
+                        if (urgency != CheckpointUrgency.MUST_TRIGGER) {
+                            // Allow to take the checkpoint read lock, if urgency is not "must trigger". We optimistically assume that
+                            // triggerred checkpoint will start soon, without us having to explicitly wait for it and without page memory
+                            // overflow.
+                            return;
+                        }
 
                         checkpointReadWriteLock.readUnlock();
 
@@ -169,13 +185,9 @@ public class CheckpointTimeoutLock implements IgniteComponent {
                         }
                     }
                 } catch (CheckpointReadLockTimeoutException e) {
-                    log.error(e.getMessage(), e);
+                    LOG.debug(e.getMessage(), e);
 
-                    throw e;
-
-                    // TODO: IGNITE-16899 After the implementation of FailureProcessor,
-                    // by analogy with 2.0, we need to reset the timeout and try again
-                    //timeout = 0;
+                    timeout = 0;
                 }
             }
         } finally {
@@ -225,9 +237,15 @@ public class CheckpointTimeoutLock implements IgniteComponent {
     }
 
     private void failCheckpointReadLock() throws CheckpointReadLockTimeoutException {
-        // TODO: IGNITE-16899 After the implementation of FailureProcessor, by analogy with 2.0,
-        // either fail the node or try acquire read lock again by throwing an CheckpointReadLockTimeoutException
+        String msg = "Checkpoint read lock acquisition has been timed out.";
 
-        throw new CheckpointReadLockTimeoutException("Checkpoint read lock acquisition has been timed out");
+        IgniteInternalException e = new IgniteInternalException(SYSTEM_CRITICAL_OPERATION_TIMEOUT_ERR, msg);
+
+        // either fail the node or try acquire read lock again by throwing an CheckpointReadLockTimeoutException
+        if (failureProcessor.process(new FailureContext(SYSTEM_CRITICAL_OPERATION_TIMEOUT, e))) {
+            throw e;
+        }
+
+        throw new CheckpointReadLockTimeoutException(msg);
     }
 }

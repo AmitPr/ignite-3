@@ -1,10 +1,10 @@
 /*
  * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
+ * contributor license agreements. See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.
  * The ASF licenses this file to You under the Apache License, Version 2.0
  * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+ * the License. You may obtain a copy of the License at
  *
  *      http://www.apache.org/licenses/LICENSE-2.0
  *
@@ -17,10 +17,14 @@
 
 package org.apache.ignite.internal.jdbc.proto;
 
+import java.sql.Connection;
+import java.time.ZoneId;
 import java.util.concurrent.CompletableFuture;
-import org.apache.ignite.internal.jdbc.proto.event.BatchExecuteRequest;
-import org.apache.ignite.internal.jdbc.proto.event.BatchExecuteResult;
-import org.apache.ignite.internal.jdbc.proto.event.BatchPreparedStmntRequest;
+import org.apache.ignite.internal.jdbc.proto.event.JdbcBatchExecuteRequest;
+import org.apache.ignite.internal.jdbc.proto.event.JdbcBatchExecuteResult;
+import org.apache.ignite.internal.jdbc.proto.event.JdbcBatchPreparedStmntRequest;
+import org.apache.ignite.internal.jdbc.proto.event.JdbcConnectResult;
+import org.apache.ignite.internal.jdbc.proto.event.JdbcFinishTxResult;
 import org.apache.ignite.internal.jdbc.proto.event.JdbcMetaColumnsRequest;
 import org.apache.ignite.internal.jdbc.proto.event.JdbcMetaColumnsResult;
 import org.apache.ignite.internal.jdbc.proto.event.JdbcMetaPrimaryKeysRequest;
@@ -29,57 +33,48 @@ import org.apache.ignite.internal.jdbc.proto.event.JdbcMetaSchemasRequest;
 import org.apache.ignite.internal.jdbc.proto.event.JdbcMetaSchemasResult;
 import org.apache.ignite.internal.jdbc.proto.event.JdbcMetaTablesRequest;
 import org.apache.ignite.internal.jdbc.proto.event.JdbcMetaTablesResult;
-import org.apache.ignite.internal.jdbc.proto.event.JdbcQueryMetadataRequest;
-import org.apache.ignite.internal.jdbc.proto.event.QueryCloseRequest;
-import org.apache.ignite.internal.jdbc.proto.event.QueryCloseResult;
-import org.apache.ignite.internal.jdbc.proto.event.QueryExecuteRequest;
-import org.apache.ignite.internal.jdbc.proto.event.QueryExecuteResult;
-import org.apache.ignite.internal.jdbc.proto.event.QueryFetchRequest;
-import org.apache.ignite.internal.jdbc.proto.event.QueryFetchResult;
+import org.apache.ignite.internal.jdbc.proto.event.JdbcQueryExecuteRequest;
+import org.apache.ignite.internal.jdbc.proto.event.Response;
 
 /**
  * Jdbc client request handler.
  */
 public interface JdbcQueryEventHandler {
     /**
-     * {@link QueryExecuteRequest} command handler.
+     * Create connection context on a server and returns connection identity.
      *
+     * @param timeZoneId Client time-zone ID.
+     *
+     * @return A future representing result of the operation.
+     */
+    CompletableFuture<JdbcConnectResult> connect(ZoneId timeZoneId);
+
+    /**
+     * {@link JdbcQueryExecuteRequest} command handler.
+     *
+     * @param connectionId Identifier of the connection.
      * @param req Execute query request.
      * @return Result future.
      */
-    CompletableFuture<QueryExecuteResult> queryAsync(QueryExecuteRequest req);
+    CompletableFuture<? extends Response> queryAsync(long connectionId, JdbcQueryExecuteRequest req);
 
     /**
-     * {@link QueryFetchRequest} command handler.
+     * {@link JdbcBatchExecuteRequest} command handler.
      *
-     * @param req Fetch query request.
-     * @return Result future.
-     */
-    CompletableFuture<QueryFetchResult> fetchAsync(QueryFetchRequest req);
-
-    /**
-     * {@link BatchExecuteRequest} command handler.
-     *
+     * @param connectionId Identifier of the connection.
      * @param req Batch query request.
      * @return Result future.
      */
-    CompletableFuture<BatchExecuteResult> batchAsync(BatchExecuteRequest req);
+    CompletableFuture<JdbcBatchExecuteResult> batchAsync(long connectionId, JdbcBatchExecuteRequest req);
 
     /**
-     * {@link BatchPreparedStmntRequest} command handler.
+     * {@link JdbcBatchPreparedStmntRequest} command handler.
      *
+     * @param connectionId The identifier of the connection.
      * @param req Batch query request.
      * @return Result future.
      */
-    CompletableFuture<BatchExecuteResult> batchPrepStatementAsync(BatchPreparedStmntRequest req);
-
-    /**
-     * {@link QueryCloseRequest} command handler.
-     *
-     * @param req Close query request.
-     * @return Result future.
-     */
-    CompletableFuture<QueryCloseResult> closeAsync(QueryCloseRequest req);
+    CompletableFuture<JdbcBatchExecuteResult> batchPrepStatementAsync(long connectionId, JdbcBatchPreparedStmntRequest req);
 
     /**
      * {@link JdbcMetaTablesRequest} command handler.
@@ -114,10 +109,11 @@ public interface JdbcQueryEventHandler {
     CompletableFuture<JdbcMetaPrimaryKeysResult> primaryKeysMetaAsync(JdbcMetaPrimaryKeysRequest req);
 
     /**
-     * {@link JdbcQueryMetadataRequest} command handler.
+     * Commit/rollback active transaction (if any) when {@link Connection#setAutoCommit(boolean)} autocommit} is disabled.
      *
-     * @param req Jdbc query metadata request.
+     * @param connectionId An identifier of the connection on a server.
+     * @param commit {@code True} to commit active transaction, {@code false} to rollback it.
      * @return Result future.
      */
-    CompletableFuture<JdbcMetaColumnsResult> queryMetadataAsync(JdbcQueryMetadataRequest req);
+    CompletableFuture<JdbcFinishTxResult> finishTxAsync(long connectionId, boolean commit);
 }

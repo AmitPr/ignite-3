@@ -1,10 +1,10 @@
 /*
  * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
+ * contributor license agreements. See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.
  * The ASF licenses this file to You under the Apache License, Version 2.0
  * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+ * the License. You may obtain a copy of the License at
  *
  *      http://www.apache.org/licenses/LICENSE-2.0
  *
@@ -18,81 +18,187 @@
 package org.apache.ignite.internal.storage.pagememory;
 
 import static org.apache.ignite.internal.pagememory.PageIdAllocator.FLAG_AUX;
-import static org.apache.ignite.internal.storage.StorageUtils.groupId;
+import static org.apache.ignite.internal.util.CompletableFutures.nullCompletedFuture;
 
-import java.util.concurrent.atomic.AtomicLong;
-import org.apache.ignite.configuration.schemas.table.TableConfiguration;
-import org.apache.ignite.configuration.schemas.table.TableView;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import org.apache.ignite.internal.lang.IgniteInternalCheckedException;
 import org.apache.ignite.internal.pagememory.util.PageLockListenerNoOp;
 import org.apache.ignite.internal.storage.StorageException;
-import org.apache.ignite.lang.IgniteInternalCheckedException;
+import org.apache.ignite.internal.storage.engine.StorageTableDescriptor;
+import org.apache.ignite.internal.storage.index.StorageIndexDescriptorSupplier;
+import org.apache.ignite.internal.storage.pagememory.index.meta.IndexMetaTree;
+import org.apache.ignite.internal.storage.pagememory.mv.AbstractPageMemoryMvPartitionStorage;
+import org.apache.ignite.internal.storage.pagememory.mv.VersionChainTree;
+import org.apache.ignite.internal.storage.pagememory.mv.VolatilePageMemoryMvPartitionStorage;
+import org.apache.ignite.internal.storage.pagememory.mv.gc.GcQueue;
 
 /**
  * Implementation of {@link AbstractPageMemoryTableStorage} for in-memory case.
  */
-class VolatilePageMemoryTableStorage extends AbstractPageMemoryTableStorage {
+public class VolatilePageMemoryTableStorage extends AbstractPageMemoryTableStorage {
+    private final VolatilePageMemoryStorageEngine engine;
+
+    private final VolatilePageMemoryDataRegion dataRegion;
+
+    private final ExecutorService destructionExecutor;
+
     /**
      * Constructor.
      *
-     * @param tableCfg – Table configuration.
-     * @param dataRegion – Data region for the table.
+     * @param tableDescriptor Table descriptor.
+     * @param indexDescriptorSupplier Index descriptor supplier.
+     * @param engine Storage engine instance.
+     * @param dataRegion Data region for the table.
+     * @param destructionExecutor Executor used to destruct partitions.
      */
-    public VolatilePageMemoryTableStorage(TableConfiguration tableCfg, VolatilePageMemoryDataRegion dataRegion) {
-        super(tableCfg, dataRegion);
+    VolatilePageMemoryTableStorage(
+            StorageTableDescriptor tableDescriptor,
+            StorageIndexDescriptorSupplier indexDescriptorSupplier,
+            VolatilePageMemoryStorageEngine engine,
+            VolatilePageMemoryDataRegion dataRegion,
+            ExecutorService destructionExecutor
+    ) {
+        super(tableDescriptor, indexDescriptorSupplier);
+
+        this.engine = engine;
+        this.dataRegion = dataRegion;
+        this.destructionExecutor = destructionExecutor;
     }
 
-    /** {@inheritDoc} */
     @Override
-    protected VolatilePageMemoryPartitionStorage createPartitionStorage(int partId) throws StorageException {
-        TableFreeList tableFreeList = ((VolatilePageMemoryDataRegion) dataRegion).tableFreeList();
+    public VolatilePageMemoryDataRegion dataRegion() {
+        return dataRegion;
+    }
 
-        TableTree tableTree = createTableTree(tableCfg.value(), partId, tableFreeList);
+    @Override
+    public VolatilePageMemoryStorageEngine engine() {
+        return engine;
+    }
 
-        return new VolatilePageMemoryPartitionStorage(
-                partId,
-                tableFreeList,
-                tableTree
+    @Override
+    public VolatilePageMemoryMvPartitionStorage createMvPartitionStorage(int partitionId) throws StorageException {
+        VersionChainTree versionChainTree = createVersionChainTree(partitionId);
+
+        IndexMetaTree indexMetaTree = createIndexMetaTree(partitionId);
+
+        GcQueue gcQueue = createGarbageCollectionTree(partitionId);
+
+        return new VolatilePageMemoryMvPartitionStorage(
+                this,
+                partitionId,
+                versionChainTree,
+                indexMetaTree,
+                gcQueue,
+                destructionExecutor
         );
     }
 
-    /** {@inheritDoc} */
-    @Override
-    public void destroy() throws StorageException {
-        stop();
-    }
-
-    /**
-     * Returns new {@link TableTree} instance for partition.
-     *
-     * @param tableView Table configuration.
-     * @param partId Partition ID.
-     * @param freeList Table free list.
-     * @throws StorageException If failed.
-     */
-    TableTree createTableTree(
-            TableView tableView,
-            int partId,
-            TableFreeList freeList
-    ) throws StorageException {
-        int grpId = groupId(tableView);
-
+    private IndexMetaTree createIndexMetaTree(int partitionId) {
         try {
-            return new TableTree(
-                    grpId,
-                    tableView.name(),
+            long metaPageId = dataRegion.pageMemory().allocatePage(dataRegion.reuseList(), getTableId(), partitionId, FLAG_AUX);
+
+            return new IndexMetaTree(
+                    getTableId(),
+                    Integer.toString(getTableId()),
+                    partitionId,
                     dataRegion.pageMemory(),
                     PageLockListenerNoOp.INSTANCE,
-                    new AtomicLong(),
-                    dataRegion.pageMemory().allocatePage(grpId, partId, FLAG_AUX),
-                    freeList,
-                    partId,
+                    engine.generateGlobalRemoveId(),
+                    metaPageId,
+                    dataRegion.reuseList(),
                     true
             );
         } catch (IgniteInternalCheckedException e) {
-            throw new StorageException(
-                    String.format("Error creating TableTree [tableName=%s, partitionId=%s]", tableView.name(), partId),
-                    e
-            );
+            throw new StorageException(e);
         }
+    }
+
+    private GcQueue createGarbageCollectionTree(int partitionId) {
+        try {
+            long metaPageId = dataRegion.pageMemory().allocatePage(dataRegion().reuseList(), getTableId(), partitionId, FLAG_AUX);
+
+            return new GcQueue(
+                    getTableId(),
+                    Integer.toString(getTableId()),
+                    partitionId,
+                    dataRegion.pageMemory(),
+                    PageLockListenerNoOp.INSTANCE,
+                    engine.generateGlobalRemoveId(),
+                    metaPageId,
+                    dataRegion.reuseList(),
+                    true
+            );
+        } catch (IgniteInternalCheckedException e) {
+            throw new StorageException(e);
+        }
+    }
+
+    @Override
+    public boolean isVolatile() {
+        return true;
+    }
+
+    @Override
+    protected void finishDestruction() {
+        // No-op.
+    }
+
+    /**
+     * Returns new {@link VersionChainTree} instance for partition.
+     *
+     * @param partId Partition ID.
+     * @throws StorageException If failed.
+     */
+    private VersionChainTree createVersionChainTree(int partId) throws StorageException {
+        try {
+            long metaPageId = dataRegion.pageMemory().allocatePage(dataRegion().reuseList(), getTableId(), partId, FLAG_AUX);
+
+            return new VersionChainTree(
+                    getTableId(),
+                    Integer.toString(getTableId()),
+                    partId,
+                    dataRegion.pageMemory(),
+                    PageLockListenerNoOp.INSTANCE,
+                    engine.generateGlobalRemoveId(),
+                    metaPageId,
+                    dataRegion.reuseList(),
+                    true
+            );
+        } catch (IgniteInternalCheckedException e) {
+            throw new StorageException("Error creating TableTree: [tableId={}, partitionId={}]", e, getTableId(), partId);
+        }
+    }
+
+    @Override
+    CompletableFuture<Void> clearStorageAndUpdateDataStructures(AbstractPageMemoryMvPartitionStorage mvPartitionStorage) {
+        VolatilePageMemoryMvPartitionStorage volatilePartitionStorage = (VolatilePageMemoryMvPartitionStorage) mvPartitionStorage;
+
+        volatilePartitionStorage.destroyStructures();
+
+        int partitionId = mvPartitionStorage.partitionId();
+
+        volatilePartitionStorage.updateDataStructures(
+                createVersionChainTree(partitionId),
+                createIndexMetaTree(partitionId),
+                createGarbageCollectionTree(partitionId)
+        );
+
+        return nullCompletedFuture();
+    }
+
+    @Override
+    CompletableFuture<Void> destroyMvPartitionStorage(AbstractPageMemoryMvPartitionStorage mvPartitionStorage) {
+        VolatilePageMemoryMvPartitionStorage volatilePartitionStorage = (VolatilePageMemoryMvPartitionStorage) mvPartitionStorage;
+
+        boolean transitioned = volatilePartitionStorage.transitionToDestroyedState();
+        if (!transitioned) {
+            // Someone has already started destruction (in which case we don't need to do anything), or closed the storage
+            // (which means the node is going down, so the volatile storage does not need to be destroyed).
+            return nullCompletedFuture();
+        }
+
+        return volatilePartitionStorage.destroyStructures()
+                .whenComplete((v, e) -> volatilePartitionStorage.closeResources());
     }
 }

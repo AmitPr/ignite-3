@@ -1,10 +1,10 @@
 /*
  * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
+ * contributor license agreements. See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.
  * The ASF licenses this file to You under the Apache License, Version 2.0
  * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+ * the License. You may obtain a copy of the License at
  *
  *      http://www.apache.org/licenses/LICENSE-2.0
  *
@@ -23,6 +23,7 @@ import java.util.stream.Stream;
 import javax.annotation.processing.ProcessingEnvironment;
 import javax.lang.model.element.TypeElement;
 import javax.lang.model.type.PrimitiveType;
+import javax.lang.model.type.TypeKind;
 import javax.lang.model.type.TypeMirror;
 import javax.lang.model.util.Elements;
 import javax.lang.model.util.Types;
@@ -44,6 +45,14 @@ public class TypeUtils {
     public TypeUtils(ProcessingEnvironment processingEnvironment) {
         this.types = processingEnvironment.getTypeUtils();
         this.elements = processingEnvironment.getElementUtils();
+    }
+
+    public Types types() {
+        return types;
+    }
+
+    public Elements elements() {
+        return elements;
     }
 
     /**
@@ -69,7 +78,18 @@ public class TypeUtils {
     public boolean isSubType(TypeMirror type1, Class<?> type2) {
         TypeMirror type2Mirror = typeMirrorFromClass(type2);
 
-        return types.isSubtype(erasure(type1), erasure(type2Mirror));
+        return isSubType(type1, type2Mirror);
+    }
+
+    /**
+     * Returns {@code true} if the <i>erasure</i> of the first type is a subtype of the second type.
+     *
+     * @param type1 first type (represented by a mirror)
+     * @param type2 second type (represented by a mirror)
+     * @return {@code true} if the erasure of the first type is a subtype of the second type, {@code false} otherwise.
+     */
+    public boolean isSubType(TypeMirror type1, TypeMirror type2) {
+        return types.isSubtype(erasure(type1), erasure(type2));
     }
 
     /**
@@ -133,5 +153,23 @@ public class TypeUtils {
         return elements
                 .getTypeElement(cls.getCanonicalName())
                 .asType();
+    }
+
+    /**
+     * Returns {@code true} if the type is an {@link Enum}.
+     *
+     * @param type Type mirror.
+     */
+    public boolean isEnum(TypeMirror type) {
+        return isSubType(type, Enum.class);
+    }
+
+    /**
+     * Returns primitive type mirror.
+     *
+     * @param kind Type kind.
+     */
+    public PrimitiveType getPrimitiveType(TypeKind kind) {
+        return types.getPrimitiveType(kind);
     }
 }

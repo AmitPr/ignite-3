@@ -1,12 +1,12 @@
 /*
  * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
+ * contributor license agreements. See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.
  * The ASF licenses this file to You under the Apache License, Version 2.0
  * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+ * the License. You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *      http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -36,6 +36,9 @@ public class BootstrapOptions {
     // If last_log_index isn't 0, fsm must be a valid instance.
     // Default: NULL
     private StateMachine fsm;
+
+    // Describe a specific LogStorage in format ${type}://${parameters}
+    private String logUri;
 
     // Describe a specific RaftMetaStorage in format ${type}://${parameters}
     private String raftMetaUri;
@@ -94,6 +97,14 @@ public class BootstrapOptions {
 
     public void setFsm(StateMachine fsm) {
         this.fsm = fsm;
+    }
+
+    public String getLogUri() {
+        return this.logUri;
+    }
+
+    public void setLogUri(String logUri) {
+        this.logUri = logUri;
     }
 
     public String getRaftMetaUri() {

@@ -1,10 +1,10 @@
 /*
  * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
+ * contributor license agreements. See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.
  * The ASF licenses this file to You under the Apache License, Version 2.0
  * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+ * the License. You may obtain a copy of the License at
  *
  *      http://www.apache.org/licenses/LICENSE-2.0
  *
@@ -18,6 +18,7 @@
 package org.apache.ignite.internal.network.serialization.marshal;
 
 import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.notNullValue;
@@ -53,7 +54,7 @@ class DefaultUserObjectMarshallerCommonTest {
         byte[] tooManyBytes = Arrays.copyOf(marshalled.bytes(), marshalled.bytes().length + 1);
 
         UnmarshalException ex = assertThrows(UnmarshalException.class, () -> marshaller.unmarshal(tooManyBytes, descriptorRegistry));
-        assertThat(ex.getMessage(), is("After reading a value, 1 excessive byte(s) still remain"));
+        assertThat(ex.getMessage(), containsString("After reading a value, 1 excessive byte(s) still remain"));
     }
 
     @Test
@@ -116,7 +117,7 @@ class DefaultUserObjectMarshallerCommonTest {
                 throw new RuntimeException(e);
             }
 
-            stream.defaultReadObject();;
+            stream.defaultReadObject();
         }
     }
 }

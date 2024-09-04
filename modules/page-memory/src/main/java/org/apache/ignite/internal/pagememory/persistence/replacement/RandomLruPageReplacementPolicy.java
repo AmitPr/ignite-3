@@ -1,10 +1,10 @@
 /*
  * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
+ * contributor license agreements. See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.
  * The ASF licenses this file to You under the Apache License, Version 2.0
  * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+ * the License. You may obtain a copy of the License at
  *
  *      http://www.apache.org/licenses/LICENSE-2.0
  *
@@ -17,24 +17,23 @@
 
 package org.apache.ignite.internal.pagememory.persistence.replacement;
 
-import static org.apache.ignite.internal.pagememory.PageIdAllocator.META_PAGE_ID;
 import static org.apache.ignite.internal.pagememory.persistence.PageHeader.fullPageId;
-import static org.apache.ignite.internal.pagememory.persistence.PageMemoryImpl.INVALID_REL_PTR;
-import static org.apache.ignite.internal.pagememory.persistence.PageMemoryImpl.PAGE_OVERHEAD;
+import static org.apache.ignite.internal.pagememory.persistence.PersistentPageMemory.INVALID_REL_PTR;
+import static org.apache.ignite.internal.pagememory.persistence.PersistentPageMemory.PAGE_OVERHEAD;
 import static org.apache.ignite.internal.pagememory.util.PageIdUtils.partitionId;
 
 import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.ThreadLocalRandom;
+import org.apache.ignite.internal.lang.IgniteInternalCheckedException;
 import org.apache.ignite.internal.pagememory.FullPageId;
 import org.apache.ignite.internal.pagememory.freelist.io.PagesListMetaIo;
 import org.apache.ignite.internal.pagememory.io.PageIo;
 import org.apache.ignite.internal.pagememory.persistence.LoadedPagesMap;
 import org.apache.ignite.internal.pagememory.persistence.PageHeader;
-import org.apache.ignite.internal.pagememory.persistence.PageMemoryImpl.Segment;
 import org.apache.ignite.internal.pagememory.persistence.PagePool;
+import org.apache.ignite.internal.pagememory.persistence.PersistentPageMemory.Segment;
 import org.apache.ignite.internal.pagememory.persistence.ReplaceCandidate;
-import org.apache.ignite.lang.IgniteInternalCheckedException;
 
 /**
  * Random-LRU page replacement policy implementation.
@@ -118,7 +117,8 @@ public class RandomLruPageReplacementPolicy extends PageReplacementPolicy {
 
                 final boolean dirty = PageHeader.dirty(absPageAddr);
 
-                if (relRmvAddr == rndAddr || pinned || skip || fullId.pageId() == META_PAGE_ID || dirty) {
+                // TODO https://issues.apache.org/jira/browse/IGNITE-23103 Fix this condition.
+                if (relRmvAddr == rndAddr || pinned || skip || dirty) {
                     i--;
 
                     continue;

@@ -1,10 +1,10 @@
 /*
  * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
+ * contributor license agreements. See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.
  * The ASF licenses this file to You under the Apache License, Version 2.0
  * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+ * the License. You may obtain a copy of the License at
  *
  *      http://www.apache.org/licenses/LICENSE-2.0
  *
@@ -19,7 +19,9 @@ package org.apache.ignite.internal.network.recovery.message;
 
 import java.util.UUID;
 import org.apache.ignite.internal.network.NetworkMessageTypes;
-import org.apache.ignite.network.annotations.Transferable;
+import org.apache.ignite.internal.network.annotations.Transferable;
+import org.apache.ignite.internal.network.message.ClusterNodeMessage;
+import org.jetbrains.annotations.Nullable;
 
 /**
  * Handshake start message, contains info about the node.
@@ -27,17 +29,10 @@ import org.apache.ignite.network.annotations.Transferable;
  */
 @Transferable(NetworkMessageTypes.HANDSHAKE_START)
 public interface HandshakeStartMessage extends InternalMessage {
-    /**
-     * Returns launch id.
-     *
-     * @return Launch id.
-     */
-    UUID launchId();
+    /** Returns the server node that sends this. */
+    ClusterNodeMessage serverNode();
 
-    /**
-     * Returns consistent id.
-     *
-     * @return Consistent id.
-     */
-    String consistentId();
+    /** ID of the cluster to which the server node belongs ({@code null} if it's not initialized yet. */
+    @Nullable
+    UUID serverClusterId();
 }

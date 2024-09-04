@@ -1,10 +1,10 @@
 /*
  * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
+ * contributor license agreements. See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.
  * The ASF licenses this file to You under the Apache License, Version 2.0
  * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+ * the License. You may obtain a copy of the License at
  *
  *      http://www.apache.org/licenses/LICENSE-2.0
  *
@@ -17,9 +17,9 @@
 
 package org.apache.ignite.internal.pagememory;
 
+import org.apache.ignite.internal.lang.IgniteStringBuilder;
 import org.apache.ignite.internal.pagememory.util.PageIdUtils;
 import org.apache.ignite.internal.util.IgniteUtils;
-import org.apache.ignite.lang.IgniteStringBuilder;
 
 /**
  * Compound object used to address a page in the global page space.
@@ -65,7 +65,7 @@ public final class FullPageId {
     /**
      * Constructor.
      *
-     * @param pageId  Page ID.
+     * @param pageId Page ID.
      * @param groupId Group ID.
      */
     public FullPageId(long pageId, int groupId) {
@@ -120,7 +120,7 @@ public final class FullPageId {
      * Returns hash code of the ID.
      *
      * @param groupId Group ID.
-     * @param pageId  Page ID.
+     * @param pageId Page ID.
      * @return Hash code.
      */
     public static int hashCode(int groupId, long pageId) {
@@ -132,7 +132,7 @@ public final class FullPageId {
     /**
      * Will not clear link bits.
      *
-     * @param groupId         Group ID.
+     * @param groupId Group ID.
      * @param effectivePageId Effective page ID.
      * @return Hash code.
      */
@@ -170,5 +170,19 @@ public final class FullPageId {
         return new IgniteStringBuilder("FullPageId [pageId=").appendHex(pageId)
                 .app(", effectivePageId=").appendHex(effectivePageId())
                 .app(", groupId=").app(groupId).app(']').toString();
+    }
+
+    /**
+     * Returns the partition ID.
+     */
+    public int partitionId() {
+        return PageIdUtils.partitionId(pageId);
+    }
+
+    /**
+     * Returns the page index.
+     */
+    public int pageIdx() {
+        return PageIdUtils.pageIndex(pageId);
     }
 }

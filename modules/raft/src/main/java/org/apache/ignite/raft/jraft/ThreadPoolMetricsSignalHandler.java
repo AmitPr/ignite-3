@@ -1,12 +1,12 @@
 /*
  * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
+ * contributor license agreements. See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.
  * The ASF licenses this file to You under the Apache License, Version 2.0
  * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+ * the License. You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *      http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -20,7 +20,8 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.PrintStream;
-import org.apache.ignite.lang.IgniteLogger;
+import org.apache.ignite.internal.logger.IgniteLogger;
+import org.apache.ignite.internal.logger.Loggers;
 import org.apache.ignite.raft.jraft.util.FileOutputSignalHandler;
 import org.apache.ignite.raft.jraft.util.MetricReporter;
 import org.apache.ignite.raft.jraft.util.SystemPropertyUtil;
@@ -31,7 +32,7 @@ import org.apache.ignite.raft.jraft.util.ThreadPoolMetricRegistry;
  */
 public class ThreadPoolMetricsSignalHandler extends FileOutputSignalHandler {
 
-    private static IgniteLogger LOG = IgniteLogger.forClass(ThreadPoolMetricsSignalHandler.class);
+    private static IgniteLogger LOG = Loggers.forClass(ThreadPoolMetricsSignalHandler.class);
 
     private static final String DIR = SystemPropertyUtil.get("jraft.signal.thread.pool.metrics.dir", "");
     private static final String BASE_NAME = "thread_pool_metrics.log";

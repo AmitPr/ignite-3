@@ -17,6 +17,7 @@
 
 namespace Apache.Ignite.Tests
 {
+    using System;
     using System.Threading.Tasks;
     using NUnit.Framework;
 
@@ -41,8 +42,11 @@ namespace Apache.Ignite.Tests
             using var server = new FakeServer();
             using var client = await server.ConnectClientAsync();
 
-            var ex = Assert.ThrowsAsync<IgniteClientException>(async () => await client.Tables.GetTableAsync("t"));
-            Assert.AreEqual(FakeServer.Err, ex!.Message);
+            var ex = Assert.ThrowsAsync<IgniteException>(async () => await client.Tables.GetTableAsync("t"));
+            Assert.AreEqual("Err!", ex!.Message);
+            Assert.AreEqual("org.foo.bar.BazException", ex.InnerException!.Message);
+            Assert.AreEqual(Guid.Empty, ex.TraceId);
+            Assert.AreEqual(ErrorGroups.Sql.StmtValidation, ex.Code);
         }
 
         [Test]
@@ -64,7 +68,7 @@ namespace Apache.Ignite.Tests
                 RetryPolicy = RetryNonePolicy.Instance
             };
 
-            using var server = new FakeServer(reqId => reqId % 3 == 0);
+            using var server = new FakeServer(ctx => ctx.RequestCount % 3 == 0);
             using var client = await server.ConnectClientAsync(cfg);
 
             // 2 requests succeed, 3rd fails.
@@ -75,6 +79,28 @@ namespace Apache.Ignite.Tests
 
             // Reconnect by FailoverSocket logic.
             await client.Tables.GetTablesAsync();
+        }
+
+        [Test]
+        public async Task TestFakeServerExecutesSql()
+        {
+            using var server = new FakeServer(disableOpsTracking: true);
+            using var client = await server.ConnectClientAsync(new());
+
+            for (int i = 0; i < 100; i++)
+            {
+                await using var res = await client.Sql.ExecuteAsync(null, "select 1");
+                var count = 0;
+
+                await foreach (var row in res)
+                {
+                    Assert.AreEqual(count, row[0]);
+                    count++;
+                }
+
+                Assert.IsTrue(res.HasRowSet);
+                Assert.AreEqual(1012, count);
+            }
         }
     }
 }

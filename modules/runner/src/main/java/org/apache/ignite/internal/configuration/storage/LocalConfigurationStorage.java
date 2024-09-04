@@ -1,10 +1,10 @@
 /*
  * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
+ * contributor license agreements. See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.
  * The ASF licenses this file to You under the Apache License, Version 2.0
  * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+ * the License. You may obtain a copy of the License at
  *
  *      http://www.apache.org/licenses/LICENSE-2.0
  *
@@ -20,6 +20,9 @@ package org.apache.ignite.internal.configuration.storage;
 import static java.util.concurrent.CompletableFuture.supplyAsync;
 import static org.apache.ignite.internal.configuration.util.ConfigurationSerializationUtil.fromBytes;
 import static org.apache.ignite.internal.configuration.util.ConfigurationSerializationUtil.toBytes;
+import static org.apache.ignite.internal.util.CompletableFutures.falseCompletedFuture;
+import static org.apache.ignite.internal.util.CompletableFutures.nullCompletedFuture;
+import static org.apache.ignite.internal.util.StringUtils.incrementLastChar;
 
 import java.io.Serializable;
 import java.util.HashMap;
@@ -31,13 +34,14 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import org.apache.ignite.configuration.annotation.ConfigurationType;
 import org.apache.ignite.internal.future.InFlightFutures;
+import org.apache.ignite.internal.lang.ByteArray;
+import org.apache.ignite.internal.logger.IgniteLogger;
+import org.apache.ignite.internal.logger.Loggers;
 import org.apache.ignite.internal.thread.NamedThreadFactory;
 import org.apache.ignite.internal.util.Cursor;
 import org.apache.ignite.internal.util.IgniteUtils;
 import org.apache.ignite.internal.vault.VaultEntry;
 import org.apache.ignite.internal.vault.VaultManager;
-import org.apache.ignite.lang.ByteArray;
-import org.apache.ignite.lang.IgniteLogger;
 
 /**
  * Local configuration storage.
@@ -50,7 +54,7 @@ public class LocalConfigurationStorage implements ConfigurationStorage {
     private static final ByteArray VERSION_KEY = new ByteArray(LOC_PREFIX + "$version");
 
     /** Logger. */
-    private static final IgniteLogger LOG = IgniteLogger.forClass(LocalConfigurationStorage.class);
+    private static final IgniteLogger LOG = Loggers.forClass(LocalConfigurationStorage.class);
 
     /** Vault manager. */
     private final VaultManager vaultMgr;
@@ -64,7 +68,7 @@ public class LocalConfigurationStorage implements ConfigurationStorage {
     /** End key in range for searching local configuration keys. */
     private static final ByteArray LOC_KEYS_END_RANGE = ByteArray.fromString(incrementLastChar(LOC_PREFIX));
 
-    private final ExecutorService threadPool = Executors.newFixedThreadPool(4, new NamedThreadFactory("loc-cfg"));
+    private final ExecutorService threadPool = Executors.newFixedThreadPool(4, new NamedThreadFactory("loc-cfg", LOG));
 
     private final InFlightFutures futureTracker = new InFlightFutures();
 
@@ -75,7 +79,7 @@ public class LocalConfigurationStorage implements ConfigurationStorage {
      *
      * <p>Multi-threaded access is guarded by {@code writeSerializationLock}.
      */
-    private CompletableFuture<Void> writeSerializationFuture = CompletableFuture.completedFuture(null);
+    private CompletableFuture<Void> writeSerializationFuture = nullCompletedFuture();
 
     /** Lock for updating the reference to the {@code writeSerializationFuture}. */
     private final Object writeSerializationLock = new Object();
@@ -90,7 +94,7 @@ public class LocalConfigurationStorage implements ConfigurationStorage {
     }
 
     @Override
-    public void close() throws Exception {
+    public void close() {
         IgniteUtils.shutdownAndAwaitTermination(threadPool, 10, TimeUnit.SECONDS);
 
         futureTracker.cancelInFlightFutures();
@@ -109,16 +113,20 @@ public class LocalConfigurationStorage implements ConfigurationStorage {
     /** {@inheritDoc} */
     @Override
     public CompletableFuture<Serializable> readLatest(String key) {
-        return vaultMgr.get(new ByteArray(LOC_PREFIX + key))
-                .thenApply(entry -> entry == null ? null : fromBytes(entry.value()))
-                .exceptionally(e -> {
-                    throw new StorageException("Exception while reading vault entry", e);
-                });
+        return registerFuture(supplyAsync(() -> {
+            try {
+                VaultEntry entry = vaultMgr.get(new ByteArray(LOC_PREFIX + key));
+
+                return entry == null ? null : fromBytes(entry.value());
+            } catch (Exception e) {
+                throw new StorageException("Exception while reading vault entry", e);
+            }
+        }, threadPool));
     }
 
     /** {@inheritDoc} */
     @Override
-    public CompletableFuture<Data> readAll() {
+    public CompletableFuture<Data> readDataOnRecovery() {
         return readAll(LOC_KEYS_START_RANGE, LOC_KEYS_END_RANGE);
     }
 
@@ -159,7 +167,7 @@ public class LocalConfigurationStorage implements ConfigurationStorage {
                     .thenCompose(v -> lastRevision())
                     .thenComposeAsync(version -> {
                         if (version != sentVersion) {
-                            return CompletableFuture.completedFuture(false);
+                            return falseCompletedFuture();
                         }
 
                         ConfigurationStorageListener lsnr = lsnrRef.get();
@@ -185,9 +193,9 @@ public class LocalConfigurationStorage implements ConfigurationStorage {
 
                         Data entries = new Data(newValues, version + 1);
 
-                        return vaultMgr.putAll(data)
-                                .thenCompose(v -> lsnr.onEntriesChanged(entries))
-                                .thenApply(v -> true);
+                        vaultMgr.putAll(data);
+
+                        return lsnr.onEntriesChanged(entries).thenApply(v -> true);
                     }, threadPool));
 
             // ignore any errors on the write future, because we are only interested in its completion
@@ -205,7 +213,7 @@ public class LocalConfigurationStorage implements ConfigurationStorage {
     @Override
     public void registerConfigurationListener(ConfigurationStorageListener lsnr) {
         if (!lsnrRef.compareAndSet(null, lsnr)) {
-            LOG.warn("Configuration listener has already been set.");
+            LOG.debug("Configuration listener has already been set");
         }
     }
 
@@ -218,17 +226,16 @@ public class LocalConfigurationStorage implements ConfigurationStorage {
     /** {@inheritDoc} */
     @Override
     public CompletableFuture<Long> lastRevision() {
-        return vaultMgr.get(VERSION_KEY)
-                .thenApply(entry -> entry == null ? 0 : (Long) fromBytes(entry.value()));
+        return registerFuture(supplyAsync(() -> {
+            VaultEntry entry = vaultMgr.get(VERSION_KEY);
+
+            return entry == null ? 0 : (Long) fromBytes(entry.value());
+        }, threadPool));
     }
 
-    /**
-     * Increments the last character of the given string.
-     */
-    private static String incrementLastChar(String str) {
-        char lastChar = str.charAt(str.length() - 1);
-
-        return str.substring(0, str.length() - 1) + (char) (lastChar + 1);
+    @Override
+    public CompletableFuture<Long> localRevision() {
+        return lastRevision();
     }
 
     private <T> CompletableFuture<T> registerFuture(CompletableFuture<T> future) {

@@ -1,10 +1,10 @@
 /*
  * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
+ * contributor license agreements. See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.
  * The ASF licenses this file to You under the Apache License, Version 2.0
  * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+ * the License. You may obtain a copy of the License at
  *
  *      http://www.apache.org/licenses/LICENSE-2.0
  *
@@ -20,12 +20,13 @@ package org.apache.ignite.internal.pagememory.mem.unsafe;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
+import org.apache.ignite.internal.lang.IgniteInternalException;
+import org.apache.ignite.internal.logger.IgniteLogger;
+import org.apache.ignite.internal.logger.Loggers;
 import org.apache.ignite.internal.pagememory.mem.DirectMemoryProvider;
 import org.apache.ignite.internal.pagememory.mem.DirectMemoryRegion;
 import org.apache.ignite.internal.pagememory.mem.MemoryAllocator;
 import org.apache.ignite.internal.util.IgniteUtils;
-import org.apache.ignite.lang.IgniteInternalException;
-import org.apache.ignite.lang.IgniteLogger;
 import org.jetbrains.annotations.Nullable;
 
 /**
@@ -35,7 +36,7 @@ import org.jetbrains.annotations.Nullable;
  */
 public class UnsafeMemoryProvider implements DirectMemoryProvider {
     /** Logger.*/
-    private static final IgniteLogger LOG = IgniteLogger.forClass(UnsafeMemoryProvider.class);
+    private static final IgniteLogger LOG = Loggers.forClass(UnsafeMemoryProvider.class);
 
     /** Array with memory regions sizes. */
     private long[] sizes;
@@ -119,13 +120,13 @@ public class UnsafeMemoryProvider implements DirectMemoryProvider {
                 throw new IgniteInternalException(msg, e);
             }
 
-            LOG.error(msg);
+            LOG.debug(msg);
 
             return null;
         }
 
         if (ptr <= 0) {
-            LOG.error("Failed to allocate next memory chunk: " + IgniteUtils.readableSize(chunkSize, true));
+            LOG.debug("Failed to allocate next memory chunk [size={}]", IgniteUtils.readableSize(chunkSize, true));
 
             return null;
         }

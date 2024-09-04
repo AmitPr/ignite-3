@@ -1,12 +1,12 @@
 /*
  * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
+ * contributor license agreements. See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.
  * The ASF licenses this file to You under the Apache License, Version 2.0
  * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+ * the License. You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *      http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -17,20 +17,15 @@
 
 package org.apache.ignite.internal.thread;
 
+import java.util.Objects;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.atomic.AtomicInteger;
-import org.apache.ignite.lang.IgniteLogger;
+import org.apache.ignite.internal.logger.IgniteLogger;
 
 /**
  * Named thread factory with prefix.
  */
 public class NamedThreadFactory implements ThreadFactory {
-    /** Logger. */
-    private static final IgniteLogger LOG = IgniteLogger.forClass(NamedThreadFactory.class);
-
-    /** LogUncaughtExceptionHandler is used as default handler for uncaught exceptions. */
-    private static final LogUncaughtExceptionHandler DFLT_LOG_UNCAUGHT_EX_HANDLER = new LogUncaughtExceptionHandler();
-
     /** Thread prefix. */
     private final String prefix;
 
@@ -47,9 +42,10 @@ public class NamedThreadFactory implements ThreadFactory {
      * Constructor.
      *
      * @param prefix Thread name prefix.
+     * @param log A logger instance is used to create {@link LogUncaughtExceptionHandler}.
      */
-    public NamedThreadFactory(String prefix) {
-        this(prefix, false);
+    public NamedThreadFactory(String prefix, IgniteLogger log) {
+        this(prefix, false, log);
     }
 
     /**
@@ -57,9 +53,10 @@ public class NamedThreadFactory implements ThreadFactory {
      *
      * @param prefix Thread name prefix.
      * @param daemon Daemon flag.
+     * @param log A logger instance is used to create {@link LogUncaughtExceptionHandler}.
      */
-    public NamedThreadFactory(String prefix, boolean daemon) {
-        this(prefix, daemon, DFLT_LOG_UNCAUGHT_EX_HANDLER);
+    public NamedThreadFactory(String prefix, boolean daemon, IgniteLogger log) {
+        this(prefix, daemon, new LogUncaughtExceptionHandler(log));
     }
 
     /**
@@ -67,13 +64,13 @@ public class NamedThreadFactory implements ThreadFactory {
      *
      * @param prefix Thread name prefix.
      * @param daemon Daemon flag.
-     * @param exHnd   Uncaught exception handler.
+     * @param exHnd Uncaught exception handler.
      */
     public NamedThreadFactory(String prefix, boolean daemon, Thread.UncaughtExceptionHandler exHnd) {
         super();
-        this.prefix = prefix;
+        this.prefix = Objects.requireNonNull(prefix, "prefix");
         this.daemon = daemon;
-        this.exHnd = exHnd != null ? exHnd : DFLT_LOG_UNCAUGHT_EX_HANDLER;
+        this.exHnd = Objects.requireNonNull(exHnd, "exHnd");
     }
 
     /** {@inheritDoc} */
@@ -96,13 +93,27 @@ public class NamedThreadFactory implements ThreadFactory {
     }
 
     /**
-     * Print uncaught exceptions to log. Default handler of uncaught exceptions for thread pools.
+     * Creates a thread factory based on a node's name and a name of the pool.
+     *
+     * @param nodeName Node name.
+     * @param poolName Pool name.
+     * @param logger Logger.
+     * @return Thread factory.
      */
-    private static final class LogUncaughtExceptionHandler implements Thread.UncaughtExceptionHandler {
-        /** {@inheritDoc} */
-        @Override
-        public void uncaughtException(Thread t, Throwable e) {
-            LOG.error("Uncaught exception in thread {}", e, t);
-        }
+    public static NamedThreadFactory create(String nodeName, String poolName, IgniteLogger logger) {
+        return new NamedThreadFactory(threadPrefix(nodeName, poolName), logger);
+    }
+
+    /**
+     * Creates a thread factory based on a node's name and a name of the pool.
+     *
+     * @param nodeName Node name.
+     * @param poolName Pool name.
+     * @param daemon Whether threads created by the factory should be daemon or not.
+     * @param logger Logger.
+     * @return Thread factory.
+     */
+    public static NamedThreadFactory create(String nodeName, String poolName, boolean daemon, IgniteLogger logger) {
+        return new NamedThreadFactory(threadPrefix(nodeName, poolName), daemon, logger);
     }
 }

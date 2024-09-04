@@ -1,10 +1,10 @@
 /*
  * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
+ * contributor license agreements. See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.
  * The ASF licenses this file to You under the Apache License, Version 2.0
  * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+ * the License. You may obtain a copy of the License at
  *
  *      http://www.apache.org/licenses/LICENSE-2.0
  *
@@ -17,11 +17,9 @@
 
 package org.apache.ignite.internal.pagememory.datastructure;
 
-import static org.apache.ignite.internal.pagememory.PageIdAllocator.FLAG_AUX;
 import static org.apache.ignite.internal.pagememory.PageIdAllocator.FLAG_DATA;
-import static org.apache.ignite.internal.pagememory.PageIdAllocator.INDEX_PARTITION;
 import static org.apache.ignite.internal.pagememory.PageIdAllocator.MAX_PARTITION_ID;
-import static org.apache.ignite.internal.pagememory.util.PageIdUtils.MAX_ITEMID_NUM;
+import static org.apache.ignite.internal.pagememory.util.PageIdUtils.MAX_ITEM_ID_NUM;
 import static org.apache.ignite.internal.pagememory.util.PageIdUtils.flag;
 import static org.apache.ignite.internal.pagememory.util.PageIdUtils.itemId;
 import static org.apache.ignite.internal.pagememory.util.PageIdUtils.partitionId;
@@ -29,6 +27,8 @@ import static org.apache.ignite.internal.pagememory.util.PageIdUtils.toDetailStr
 
 import java.util.Random;
 import java.util.concurrent.ThreadLocalRandom;
+import org.apache.ignite.internal.close.ManuallyCloseable;
+import org.apache.ignite.internal.lang.IgniteInternalCheckedException;
 import org.apache.ignite.internal.pagememory.FullPageId;
 import org.apache.ignite.internal.pagememory.PageIdAllocator;
 import org.apache.ignite.internal.pagememory.PageMemory;
@@ -40,15 +40,13 @@ import org.apache.ignite.internal.pagememory.reuse.ReuseList;
 import org.apache.ignite.internal.pagememory.util.PageHandler;
 import org.apache.ignite.internal.pagememory.util.PageIdUtils;
 import org.apache.ignite.internal.pagememory.util.PageLockListener;
-import org.apache.ignite.internal.util.IgniteUtils;
 import org.apache.ignite.internal.util.StringUtils;
-import org.apache.ignite.lang.IgniteInternalCheckedException;
 import org.jetbrains.annotations.Nullable;
 
 /**
  * Base class for all the data structures based on {@link PageMemory}.
  */
-public abstract class DataStructure {
+public abstract class DataStructure implements ManuallyCloseable {
     /** For tests. */
     // TODO: https://issues.apache.org/jira/browse/IGNITE-16350
     public static Random rnd;
@@ -63,43 +61,49 @@ public abstract class DataStructure {
     protected final int grpId;
 
     /** Group name. */
-    protected final String grpName;
+    protected final @Nullable String grpName;
 
     /** Page memory. */
     protected final PageMemory pageMem;
 
     /** Reuse list. */
-    @Nullable
-    protected ReuseList reuseList;
+    protected @Nullable ReuseList reuseList;
 
     /** Default flag value for allocated pages. One of {@link PageIdAllocator#FLAG_DATA} or {@link PageIdAllocator#FLAG_AUX}. */
     protected final byte defaultPageFlag;
 
+    /** Partition id. */
+    protected final int partId;
+
     /**
      * Constructor.
      *
-     * @param name Structure name (for debugging purposes).
-     * @param grpId Group id.
+     * @param structureNamePrefix Structure name prefix (for debugging purposes).
+     * @param grpId Group ID.
      * @param grpName Group name.
+     * @param partId Partition ID.
      * @param pageMem Page memory.
      * @param lockLsnr Page lock listener.
      * @param defaultPageFlag Default flag value for allocated pages. One of {@link PageIdAllocator#FLAG_DATA} or {@link
-     * PageIdAllocator#FLAG_AUX}.
+     *      PageIdAllocator#FLAG_AUX}.
      */
     public DataStructure(
-            String name,
+            String structureNamePrefix,
             int grpId,
             @Nullable String grpName,
+            int partId,
             PageMemory pageMem,
             PageLockListener lockLsnr,
             byte defaultPageFlag
     ) {
-        assert !StringUtils.nullOrEmpty(name);
+        assert !StringUtils.nullOrEmpty(structureNamePrefix);
         assert pageMem != null;
+        assert partId >= 0 && partId <= MAX_PARTITION_ID : partId;
 
-        this.name = name;
+        this.name = structureNamePrefix + "_" + grpId + "_" + partId;
         this.grpId = grpId;
         this.grpName = grpName;
+        this.partId = partId;
         this.pageMem = pageMem;
         this.lockLsnr = lockLsnr;
         this.defaultPageFlag = defaultPageFlag;
@@ -150,33 +154,7 @@ public abstract class DataStructure {
      * @throws IgniteInternalCheckedException If failed.
      */
     protected final long allocatePage(@Nullable ReuseBag bag, boolean useRecycled) throws IgniteInternalCheckedException {
-        long pageId = 0;
-
-        if (useRecycled && reuseList != null) {
-            pageId = bag != null ? bag.pollFreePage() : 0;
-
-            if (pageId == 0) {
-                pageId = reuseList.takeRecycledPage();
-            }
-
-            // Recycled. "pollFreePage" result should be reinitialized to move rotatedId to itemId.
-            if (pageId != 0) {
-                pageId = reuseList.initRecycledPage(pageId, defaultPageFlag, null);
-            }
-        }
-
-        if (pageId == 0) {
-            pageId = allocatePageNoReuse();
-        }
-
-        assert pageId != 0;
-
-        assert partitionId(pageId) == INDEX_PARTITION && flag(pageId) == FLAG_AUX
-                || partitionId(pageId) <= MAX_PARTITION_ID : toDetailString(pageId);
-
-        assert flag(pageId) != FLAG_DATA || itemId(pageId) == 0 : toDetailString(pageId);
-
-        return pageId;
+        return pageMem.allocatePage(reuseList, bag, useRecycled, grpId, partId, defaultPageFlag);
     }
 
     /**
@@ -185,7 +163,9 @@ public abstract class DataStructure {
      * @return Page ID of newly allocated page.
      * @throws IgniteInternalCheckedException If failed.
      */
-    protected abstract long allocatePageNoReuse() throws IgniteInternalCheckedException;
+    protected long allocatePageNoReuse() throws IgniteInternalCheckedException {
+        return pageMem.allocatePageNoReuse(grpId, partId, defaultPageFlag);
+    }
 
     /**
      * Acquires the page by the given ID. This method will allocate a page with the given ID if it doesn't exist.
@@ -198,8 +178,7 @@ public abstract class DataStructure {
      * @throws IgniteInternalCheckedException If failed.
      */
     protected final long acquirePage(long pageId, IoStatisticsHolder statHolder) throws IgniteInternalCheckedException {
-        assert partitionId(pageId) == INDEX_PARTITION && flag(pageId) == FLAG_AUX
-                || partitionId(pageId) <= MAX_PARTITION_ID : toDetailString(pageId);
+        assert partitionId(pageId) >= 0 && partitionId(pageId) <= MAX_PARTITION_ID : toDetailString(pageId);
 
         return pageMem.acquirePage(grpId, pageId, statHolder);
     }
@@ -431,7 +410,7 @@ public abstract class DataStructure {
      * @return Page ID with the incremented rotation ID.
      * @see FullPageId
      */
-    protected final long recyclePage(long pageId, long pageAddr) {
+    protected static long recyclePage(long pageId, long pageAddr) {
         long recycled = 0;
 
         if (flag(pageId) == FLAG_DATA) {
@@ -448,7 +427,7 @@ public abstract class DataStructure {
             recycled = PageIdUtils.rotatePageId(pageId);
         }
 
-        assert itemId(recycled) > 0 && itemId(recycled) <= MAX_ITEMID_NUM : IgniteUtils.hexLong(recycled);
+        assert itemId(recycled) > 0 && itemId(recycled) <= MAX_ITEM_ID_NUM : StringUtils.hexLong(recycled);
 
         PageIo.setPageId(pageAddr, recycled);
 
@@ -465,6 +444,7 @@ public abstract class DataStructure {
     /**
      * Frees the resources allocated by this structure.
      */
+    @Override
     public void close() {
         lockLsnr.close();
     }

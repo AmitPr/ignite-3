@@ -1,10 +1,10 @@
 /*
  * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
+ * contributor license agreements. See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.
  * The ASF licenses this file to You under the Apache License, Version 2.0
  * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+ * the License. You may obtain a copy of the License at
  *
  *      http://www.apache.org/licenses/LICENSE-2.0
  *
@@ -21,15 +21,12 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
-import java.util.BitSet;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.Map;
 import java.util.UUID;
-import org.apache.ignite.binary.BinaryObject;
 import org.apache.ignite.sql.ResultSetMetadata;
 import org.apache.ignite.sql.SqlRow;
-import org.jetbrains.annotations.NotNull;
 
 /**
  * Dummy table storage implementation.
@@ -90,14 +87,14 @@ class TestRow implements SqlRow {
 
     /** {@inheritDoc} */
     @Override
-    public BinaryObject binaryObjectValue(String columnName) {
-        throw new UnsupportedOperationException();
+    public boolean booleanValue(String columnName) {
+        return value(columnName);
     }
 
     /** {@inheritDoc} */
     @Override
-    public BinaryObject binaryObjectValue(int columnIndex) {
-        return null;
+    public boolean booleanValue(int columnIndex) {
+        return false;
     }
 
     /** {@inheritDoc} */
@@ -198,18 +195,6 @@ class TestRow implements SqlRow {
 
     /** {@inheritDoc} */
     @Override
-    public BitSet bitmaskValue(String columnName) {
-        return value(columnName);
-    }
-
-    /** {@inheritDoc} */
-    @Override
-    public BitSet bitmaskValue(int columnIndex) {
-        return null;
-    }
-
-    /** {@inheritDoc} */
-    @Override
     public LocalDate dateValue(String columnName) {
         return null;
     }
@@ -257,7 +242,6 @@ class TestRow implements SqlRow {
     }
 
     /** {@inheritDoc} */
-    @NotNull
     @Override
     public Iterator<Object> iterator() {
         throw new UnsupportedOperationException();

@@ -19,10 +19,11 @@ namespace Apache.Ignite.Internal
 {
     using System.Collections.Generic;
     using System.Linq;
-    using System.Net;
     using System.Threading.Tasks;
+    using Common;
     using Ignite.Compute;
     using Ignite.Network;
+    using Ignite.Sql;
     using Ignite.Table;
     using Ignite.Transactions;
     using Network;
@@ -34,28 +35,26 @@ namespace Apache.Ignite.Internal
     /// </summary>
     internal sealed class IgniteClientInternal : IIgniteClient
     {
-        /** Underlying connection. */
-        private readonly ClientFailoverSocket _socket;
-
         /// <summary>
         /// Initializes a new instance of the <see cref="IgniteClientInternal"/> class.
         /// </summary>
         /// <param name="socket">Socket.</param>
         public IgniteClientInternal(ClientFailoverSocket socket)
         {
-            _socket = socket;
+            Socket = socket;
 
-            var tables = new Tables(socket);
+            var sql = new Sql.Sql(socket);
+            var tables = new Tables(socket, sql);
+
             Tables = tables;
-
-            Transactions = new Transactions.Transactions(socket);
-
+            Transactions = new Transactions.Transactions();
             Compute = new Compute.Compute(socket, tables);
+            Sql = sql;
         }
 
         /// <inheritdoc/>
         public IgniteClientConfiguration Configuration =>
-            new(_socket.Configuration); // Defensive copy.
+            new(Socket.Configuration); // Defensive copy.
 
         /// <inheritdoc/>
         public ITables Tables { get; }
@@ -67,24 +66,29 @@ namespace Apache.Ignite.Internal
         public ICompute Compute { get; }
 
         /// <inheritdoc/>
+        public ISql Sql { get; }
+
+        /// <summary>
+        /// Gets the underlying socket.
+        /// </summary>
+        internal ClientFailoverSocket Socket { get; }
+
+        /// <inheritdoc/>
         public async Task<IList<IClusterNode>> GetClusterNodesAsync()
         {
-            using var resBuf = await _socket.DoOutInOpAsync(ClientOp.ClusterGetNodes).ConfigureAwait(false);
+            using var resBuf = await Socket.DoOutInOpAsync(ClientOp.ClusterGetNodes).ConfigureAwait(false);
 
             return Read();
 
             IList<IClusterNode> Read()
             {
                 var r = resBuf.GetReader();
-                var count = r.ReadArrayHeader();
+                var count = r.ReadInt32();
                 var res = new List<IClusterNode>(count);
 
                 for (var i = 0; i < count; i++)
                 {
-                    res.Add(new ClusterNode(
-                        Id: r.ReadString(),
-                        Name: r.ReadString(),
-                        Address: new IPEndPoint(IPAddress.Parse(r.ReadString()), r.ReadInt32())));
+                    res.Add(ClusterNode.Read(ref r));
                 }
 
                 return res;
@@ -92,13 +96,15 @@ namespace Apache.Ignite.Internal
         }
 
         /// <inheritdoc/>
-        public IList<IClusterNode> GetConnections() =>
-            _socket.GetConnections().Select(ctx => ctx.ClusterNode).ToList();
+        public IList<IConnectionInfo> GetConnections() => Socket.GetConnections();
 
         /// <inheritdoc/>
-        public void Dispose()
-        {
-            _socket.Dispose();
-        }
+        public void Dispose() => Socket.Dispose();
+
+        /// <inheritdoc/>
+        public override string ToString() =>
+            new IgniteToStringBuilder(GetType())
+                .AppendList(GetConnections().Select(c => c.Node), "Connections")
+                .Build();
     }
 }

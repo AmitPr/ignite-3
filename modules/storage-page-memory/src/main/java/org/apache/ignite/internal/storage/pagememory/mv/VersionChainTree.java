@@ -1,10 +1,10 @@
 /*
  * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
+ * contributor license agreements. See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.
  * The ASF licenses this file to You under the Apache License, Version 2.0
  * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+ * the License. You may obtain a copy of the License at
  *
  *      http://www.apache.org/licenses/LICENSE-2.0
  *
@@ -17,11 +17,9 @@
 
 package org.apache.ignite.internal.storage.pagememory.mv;
 
-import static org.apache.ignite.internal.pagememory.PageIdAllocator.FLAG_AUX;
-
 import java.util.concurrent.atomic.AtomicLong;
+import org.apache.ignite.internal.lang.IgniteInternalCheckedException;
 import org.apache.ignite.internal.pagememory.PageMemory;
-import org.apache.ignite.internal.pagememory.metric.IoStatisticsHolderNoOp;
 import org.apache.ignite.internal.pagememory.reuse.ReuseList;
 import org.apache.ignite.internal.pagememory.tree.BplusTree;
 import org.apache.ignite.internal.pagememory.tree.io.BplusIo;
@@ -30,85 +28,67 @@ import org.apache.ignite.internal.storage.pagememory.mv.io.VersionChainInnerIo;
 import org.apache.ignite.internal.storage.pagememory.mv.io.VersionChainIo;
 import org.apache.ignite.internal.storage.pagememory.mv.io.VersionChainLeafIo;
 import org.apache.ignite.internal.storage.pagememory.mv.io.VersionChainMetaIo;
-import org.apache.ignite.lang.IgniteInternalCheckedException;
 import org.jetbrains.annotations.Nullable;
 
 /**
  * {@link BplusTree} implementation for storing version chains.
  */
-public class VersionChainTree extends BplusTree<VersionChainLink, VersionChain> {
-    private final int partitionId;
-
-    private final VersionChainDataPageReader dataPageReader;
-
+public class VersionChainTree extends BplusTree<VersionChainKey, VersionChain> {
     /**
      * Constructor.
      *
      * @param grpId Group ID.
      * @param grpName Group name.
+     * @param partId Partition id.
      * @param pageMem Page memory.
      * @param lockLsnr Page lock listener.
-     * @param globalRmvId Global remove ID.
+     * @param globalRmvId Global remove ID, for a tree that was created for the first time it can be {@code 0}, for restored ones it
+     *      must be greater than or equal to the previous value.
      * @param metaPageId Meta page ID.
      * @param reuseList Reuse list.
-     * @param partitionId Partition id.
-     * @param initNew {@code True} if new tree should be created.
+     * @param initNew {@code True} if need to create and fill in special pages for working with a tree (for example, when creating it
+     *      for the first time), {@code false} if not necessary (for example, when restoring a tree).
+     * @throws IgniteInternalCheckedException If failed.
      */
     public VersionChainTree(
             int grpId,
             String grpName,
+            int partId,
             PageMemory pageMem,
             PageLockListener lockLsnr,
             AtomicLong globalRmvId,
             long metaPageId,
             @Nullable ReuseList reuseList,
-            int partitionId,
             boolean initNew
     ) throws IgniteInternalCheckedException {
         super(
-                "VersionChainTree_" + grpId,
+                "VersionChainTree",
                 grpId,
                 grpName,
+                partId,
                 pageMem,
                 lockLsnr,
-                FLAG_AUX,
                 globalRmvId,
                 metaPageId,
                 reuseList
         );
-
-        this.partitionId = partitionId;
-
-        dataPageReader = new VersionChainDataPageReader(pageMem, grpId, IoStatisticsHolderNoOp.INSTANCE);
 
         setIos(VersionChainInnerIo.VERSIONS, VersionChainLeafIo.VERSIONS, VersionChainMetaIo.VERSIONS);
 
         initTree(initNew);
     }
 
-    /** {@inheritDoc} */
     @Override
-    protected long allocatePageNoReuse() throws IgniteInternalCheckedException {
-        return pageMem.allocatePage(grpId, partitionId, defaultPageFlag);
-    }
-
-    /** {@inheritDoc} */
-    @Override
-    protected int compare(BplusIo<VersionChainLink> io, long pageAddr, int idx, VersionChainLink row) {
+    protected int compare(BplusIo<VersionChainKey> io, long pageAddr, int idx, VersionChainKey row) {
         VersionChainIo versionChainIo = (VersionChainIo) io;
 
-        long thisLink = versionChainIo.link(pageAddr, idx);
-        long thatLink = row.link();
-        return Long.compare(thisLink, thatLink);
+        return versionChainIo.compare(pageAddr, idx, row);
     }
 
-    /** {@inheritDoc} */
     @Override
-    public VersionChain getRow(BplusIo<VersionChainLink> io, long pageAddr, int idx, Object x) throws IgniteInternalCheckedException {
-        VersionChainIo rowIo = (VersionChainIo) io;
+    public VersionChain getRow(BplusIo<VersionChainKey> io, long pageAddr, int idx, Object x) {
+        VersionChainIo versionChainIo = (VersionChainIo) io;
 
-        long link = rowIo.link(pageAddr, idx);
-
-        return dataPageReader.getRowByLink(link);
+        return versionChainIo.getRow(pageAddr, idx, partId);
     }
 }

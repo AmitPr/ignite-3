@@ -1,10 +1,10 @@
 /*
  * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
+ * contributor license agreements. See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.
  * The ASF licenses this file to You under the Apache License, Version 2.0
  * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+ * the License. You may obtain a copy of the License at
  *
  *      http://www.apache.org/licenses/LICENSE-2.0
  *
@@ -20,7 +20,7 @@ package org.apache.ignite.internal.network.serialization.marshal;
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
 import java.util.Map;
-import java.util.WeakHashMap;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
 import org.apache.ignite.internal.network.serialization.Classes;
 import org.jetbrains.annotations.Nullable;
@@ -29,7 +29,7 @@ import org.jetbrains.annotations.Nullable;
  * Validations that are run before marshalling objects.
  */
 class MarshallingValidations {
-    private final Map<Class<?>, Marshallability> marshallabilityMap = new WeakHashMap<>();
+    private final Map<Class<?>, Marshallability> marshallabilityMap = new ConcurrentHashMap<>();
 
     private final Function<Class<?>, Marshallability> marshallabilityFunction = this::marshallability;
 

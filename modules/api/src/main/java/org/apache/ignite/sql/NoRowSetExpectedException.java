@@ -1,10 +1,10 @@
 /*
  * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
+ * contributor license agreements. See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.
  * The ASF licenses this file to You under the Apache License, Version 2.0
  * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+ * the License. You may obtain a copy of the License at
  *
  *      http://www.apache.org/licenses/LICENSE-2.0
  *
@@ -17,18 +17,16 @@
 
 package org.apache.ignite.sql;
 
-import org.apache.ignite.lang.IgniteException;
+import static org.apache.ignite.lang.ErrorGroups.Sql.QUERY_NO_RESULT_SET_ERR;
 
 /**
- * Exception is thrown when the query doesn't intend to return any rows. E.g. DML or DDL queries.
+ * Exception is thrown when a query doesn't intend to return any rows (e.g. a DML or a DDL query).
  */
-public class NoRowSetExpectedException extends IgniteException {
+public class NoRowSetExpectedException extends SqlException {
     /**
      * Creates an exception.
-     *
-     * @param msg Message.
      */
-    public NoRowSetExpectedException(String msg) {
-        super(msg);
+    public NoRowSetExpectedException() {
+        super(QUERY_NO_RESULT_SET_ERR, "Query has no result set");
     }
 }

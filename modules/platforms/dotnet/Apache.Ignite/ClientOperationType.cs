@@ -18,6 +18,7 @@
 namespace Apache.Ignite
 {
     using Compute;
+    using Sql;
     using Table;
 
     /// <summary>
@@ -111,8 +112,58 @@ namespace Apache.Ignite
         TupleGetAndDelete,
 
         /// <summary>
-        /// Compute (<see cref="ICompute.ExecuteAsync{T}"/>, <see cref="ICompute.BroadcastAsync{T}"/>).
+        /// Contains key (<see cref="IKeyValueView{TK,TV}.ContainsAsync"/>).
+        /// </summary>
+        TupleContainsKey,
+
+        /// <summary>
+        /// Compute (<see cref="ICompute.SubmitAsync{TTarget,TArg,TResult}"/>, <see cref="ICompute.SubmitBroadcast{TArg,TResult}"/>).
         /// </summary>
         ComputeExecute,
+
+        /// <summary>
+        /// Compute (<see cref="ICompute.SubmitMapReduceAsync{TArg,TResult}"/>).
+        /// </summary>
+        ComputeExecuteMapReduce,
+
+        /// <summary>
+        /// SQL (<see cref="ISql.ExecuteAsync"/>, <see cref="ISql.ExecuteAsync{T}"/>).
+        /// </summary>
+        SqlExecute,
+
+        /// <summary>
+        /// SQL script (<see cref="ISql.ExecuteScriptAsync"/>).
+        /// </summary>
+        SqlExecuteScript,
+
+        /// <summary>
+        /// Get status of a compute job (<see cref="IJobExecution{T}.GetStateAsync"/>).
+        /// </summary>
+        ComputeGetStatus,
+
+        /// <summary>
+        /// Cancel compute job (<see cref="IJobExecution{T}.CancelAsync"/>).
+        /// </summary>
+        ComputeCancel,
+
+        /// <summary>
+        /// Change compute job priority (<see cref="IJobExecution{T}.ChangePriorityAsync"/>).
+        /// </summary>
+        ComputeChangePriority,
+
+        /// <summary>
+        /// Get primary replicas (<see cref="IPartitionManager.GetPrimaryReplicasAsync"/>).
+        /// </summary>
+        PrimaryReplicasGet,
+
+        /// <summary>
+        /// Send data streamer batch (<see cref="IDataStreamerTarget{T}"/>).
+        /// </summary>
+        StreamerBatchSend,
+
+        /// <summary>
+        /// Send data streamer batch with receiver (<see cref="IDataStreamerTarget{T}"/>).
+        /// </summary>
+        StreamerWithReceiverBatchSend
     }
 }

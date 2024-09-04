@@ -1,10 +1,10 @@
 /*
  * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
+ * contributor license agreements. See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.
  * The ASF licenses this file to You under the Apache License, Version 2.0
  * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+ * the License. You may obtain a copy of the License at
  *
  *      http://www.apache.org/licenses/LICENSE-2.0
  *
@@ -17,8 +17,18 @@
 
 package org.apache.ignite.internal.util;
 
+import static java.util.Arrays.copyOfRange;
+import static java.util.concurrent.CompletableFuture.allOf;
+import static java.util.concurrent.CompletableFuture.failedFuture;
+import static org.apache.ignite.lang.ErrorGroups.Common.NODE_STOPPING_ERR;
+
 import java.io.IOException;
+import java.lang.management.ManagementFactory;
+import java.lang.reflect.Field;
+import java.lang.reflect.Modifier;
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.nio.channels.FileChannel;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
@@ -26,37 +36,55 @@ import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.SimpleFileVisitor;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
+import java.util.function.Function;
+import java.util.function.IntSupplier;
 import java.util.function.Predicate;
+import java.util.function.Supplier;
 import java.util.stream.Stream;
+import javax.management.MBeanServer;
+import javax.management.MalformedObjectNameException;
+import javax.management.ObjectName;
+import org.apache.ignite.internal.close.ManuallyCloseable;
+import org.apache.ignite.internal.lang.IgniteInternalException;
+import org.apache.ignite.internal.lang.IgniteStringFormatter;
+import org.apache.ignite.internal.lang.NodeStoppingException;
+import org.apache.ignite.internal.logger.IgniteLogger;
+import org.apache.ignite.internal.manager.ComponentContext;
+import org.apache.ignite.internal.manager.IgniteComponent;
+import org.apache.ignite.internal.thread.PublicApiThreading;
+import org.apache.ignite.internal.thread.ThreadAttributes;
+import org.apache.ignite.internal.thread.ThreadOperation;
 import org.apache.ignite.internal.util.worker.IgniteWorker;
-import org.apache.ignite.lang.IgniteLogger;
-import org.apache.ignite.lang.IgniteStringBuilder;
-import org.apache.ignite.lang.IgniteStringFormatter;
 import org.jetbrains.annotations.Nullable;
 
 /**
  * Collection of utility methods used throughout the system.
  */
 public class IgniteUtils {
-    /** Byte bit-mask. */
-    private static final int MASK = 0xf;
 
     /** The moment will be used as a start monotonic time. */
     private static final long BEGINNING_OF_TIME = System.nanoTime();
@@ -93,6 +121,11 @@ public class IgniteUtils {
 
     /** Class cache. */
     private static final ConcurrentMap<ClassLoader, ConcurrentMap<String, Class<?>>> classCache = new ConcurrentHashMap<>();
+
+    /**
+     * Root package for JMX MBeans.
+     */
+    private static final String JMX_MBEAN_PACKAGE = "org.apache";
 
     /**
      * Get JDK version.
@@ -132,6 +165,28 @@ public class IgniteUtils {
     }
 
     /**
+     * Returns the amount of RAM memory available on this machine.
+     *
+     * @return Total amount of memory in bytes or {@code -1} if any exception happened.
+     */
+    public static long getTotalMemoryAvailable() {
+        MBeanServer mbeanServer = ManagementFactory.getPlatformMBeanServer();
+
+        Object attr;
+
+        try {
+            attr = mbeanServer.getAttribute(
+                    ObjectName.getInstance("java.lang", "type", "OperatingSystem"),
+                    "TotalPhysicalMemorySize"
+            );
+        } catch (Exception e) {
+            return -1;
+        }
+
+        return (attr instanceof Long) ? (Long) attr : -1;
+    }
+
+    /**
      * Returns a capacity that is sufficient to keep the map from being resized as long as it grows no larger than expSize and the load
      * factor is &gt;= its default (0.75).
      *
@@ -156,8 +211,8 @@ public class IgniteUtils {
      * Creates new {@link HashMap} with expected size.
      *
      * @param expSize Expected size of the created map.
-     * @param <K>     Type of the map's keys.
-     * @param <V>     Type of the map's values.
+     * @param <K> Type of the map's keys.
+     * @param <V> Type of the map's values.
      * @return New map.
      */
     public static <K, V> HashMap<K, V> newHashMap(int expSize) {
@@ -168,8 +223,8 @@ public class IgniteUtils {
      * Creates new {@link LinkedHashMap} with expected size.
      *
      * @param expSize Expected size of created map.
-     * @param <K>     Type of the map's keys.
-     * @param <V>     Type of the map's values.
+     * @param <K> Type of the map's keys.
+     * @param <V> Type of the map's values.
      * @return New map.
      */
     public static <K, V> LinkedHashMap<K, V> newLinkedHashMap(int expSize) {
@@ -222,104 +277,6 @@ public class IgniteUtils {
         int val = (int) (key ^ (key >>> 32));
 
         return hash(val);
-    }
-
-    /**
-     * Converts byte array to hex string.
-     *
-     * @param arr Array of bytes.
-     * @return Hex string.
-     */
-    public static String toHexString(byte[] arr) {
-        return toHexString(arr, Integer.MAX_VALUE);
-    }
-
-    /**
-     * Converts byte array to hex string.
-     *
-     * @param arr    Array of bytes.
-     * @param maxLen Maximum length of result string. Rounds down to a power of two.
-     * @return Hex string.
-     */
-    public static String toHexString(byte[] arr, int maxLen) {
-        assert maxLen >= 0 : "maxLem must be not negative.";
-
-        int capacity = Math.min(arr.length << 1, maxLen);
-
-        int lim = capacity >> 1;
-
-        StringBuilder sb = new StringBuilder(capacity);
-
-        for (int i = 0; i < lim; i++) {
-            addByteAsHex(sb, arr[i]);
-        }
-
-        return sb.toString().toUpperCase();
-    }
-
-    /**
-     * Returns hex representation of memory region.
-     *
-     * @param addr Pointer in memory.
-     * @param len How much byte to read.
-     */
-    public static String toHexString(long addr, int len) {
-        StringBuilder sb = new StringBuilder(len * 2);
-
-        for (int i = 0; i < len; i++) {
-            // Can not use getLong because on little-endian it produces wrong result.
-            addByteAsHex(sb, GridUnsafe.getByte(addr + i));
-        }
-
-        return sb.toString();
-    }
-
-    /**
-     * Returns hex representation of memory region.
-     *
-     * @param buf Buffer which content should be converted to string.
-     */
-    public static String toHexString(ByteBuffer buf) {
-        StringBuilder sb = new StringBuilder(buf.capacity() * 2);
-
-        for (int i = buf.position(); i < buf.limit(); i++) {
-            // Can not use getLong because on little-endian it produces wrong result.
-            addByteAsHex(sb, buf.get(i));
-        }
-
-        return sb.toString();
-    }
-
-    /**
-     * Appends {@code byte} in hexadecimal format.
-     *
-     * @param sb String builder.
-     * @param b  Byte to add in hexadecimal format.
-     */
-    private static void addByteAsHex(StringBuilder sb, byte b) {
-        sb.append(Integer.toHexString(MASK & b >>> 4)).append(Integer.toHexString(MASK & b));
-    }
-
-    /**
-     * Returns a hex string representation of the given long value.
-     *
-     * @param val Value to convert to string.
-     * @return Hex string.
-     */
-    //TODO IGNITE-16350 Consider renaming or moving into other class.
-    public static String hexLong(long val) {
-        return new IgniteStringBuilder(16).appendHex(val).toString();
-    }
-
-    /**
-     * Returns a hex string representation of the given integer value.
-     *
-     * @param val Value to convert to string.
-     * @return Hex string.
-     */
-    //TODO IGNITE-16350 Consider renaming or moving into other class.
-    public static String hexInt(int val) {
-        return new IgniteStringBuilder(8).appendHex(val).toString();
     }
 
     /**
@@ -398,7 +355,7 @@ public class IgniteUtils {
      * Gets class for provided name. Accepts primitive types names.
      *
      * @param clsName Class name.
-     * @param ldr     Class loader.
+     * @param ldr Class loader.
      * @return Class.
      * @throws ClassNotFoundException If class not found.
      */
@@ -409,8 +366,8 @@ public class IgniteUtils {
     /**
      * Gets class for provided name. Accepts primitive types names.
      *
-     * @param clsName   Class name.
-     * @param ldr       Class loader.
+     * @param clsName Class name.
+     * @param ldr Class loader.
      * @param clsFilter Predicate to filter class names.
      * @return Class.
      * @throws ClassNotFoundException If class not found.
@@ -418,7 +375,7 @@ public class IgniteUtils {
     public static Class<?> forName(
             String clsName,
             @Nullable ClassLoader ldr,
-            Predicate<String> clsFilter
+            @Nullable Predicate<String> clsFilter
     ) throws ClassNotFoundException {
         assert clsName != null;
 
@@ -469,31 +426,73 @@ public class IgniteUtils {
      */
     public static boolean deleteIfExists(Path path) {
         try {
-            Files.walkFileTree(path, new SimpleFileVisitor<>() {
-                @Override
-                public FileVisitResult postVisitDirectory(Path dir, IOException exc) throws IOException {
-                    if (exc != null) {
-                        throw exc;
-                    }
-
-                    Files.delete(dir);
-
-                    return FileVisitResult.CONTINUE;
-                }
-
-                @Override
-                public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
-                    Files.delete(file);
-
-                    return FileVisitResult.CONTINUE;
-                }
-            });
-
+            deleteIfExistsThrowable(path);
             return true;
         } catch (NoSuchFileException e) {
             return true;
         } catch (IOException e) {
             return false;
+        }
+    }
+
+    /**
+     * Deletes a file or a directory with all sub-directories and files.
+     *
+     * @param path File or directory to delete.
+     * @throws IOException if an I/O error is thrown by a visitor method
+     */
+    public static void deleteIfExistsThrowable(Path path) throws IOException {
+        Files.walkFileTree(path, new SimpleFileVisitor<>() {
+            @Override
+            public FileVisitResult postVisitDirectory(Path dir, IOException exc) throws IOException {
+                if (exc != null) {
+                    throw exc;
+                }
+
+                Files.delete(dir);
+
+                return FileVisitResult.CONTINUE;
+            }
+
+            @Override
+            public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
+                Files.delete(file);
+
+                return FileVisitResult.CONTINUE;
+            }
+        });
+    }
+
+    /**
+     * Calls fsync on a directory.
+     *
+     * @param dir Path to the directory.
+     * @throws IOException If an I/O error occurs.
+     */
+    public static void fsyncDir(Path dir) throws IOException {
+        assert Files.isDirectory(dir) : dir;
+
+        // Fsync for directories doesn't work on Windows.
+        if (OperatingSystem.current() == OperatingSystem.WINDOWS) {
+            return;
+        }
+
+        try (FileChannel fc = FileChannel.open(dir, StandardOpenOption.READ)) {
+            fc.force(true);
+        }
+    }
+
+    /**
+     * Calls fsync on a file.
+     *
+     * @param file Path to the file.
+     * @throws IOException If an I/O error occurs.
+     */
+    public static void fsyncFile(Path file) throws IOException {
+        assert Files.isRegularFile(file) : file;
+
+        try (FileChannel fc = FileChannel.open(file, StandardOpenOption.WRITE)) {
+            fc.force(true);
         }
     }
 
@@ -525,9 +524,13 @@ public class IgniteUtils {
      *
      * @param service the {@code ExecutorService} to shut down
      * @param timeout the maximum time to wait for the {@code ExecutorService} to terminate
-     * @param unit    the time unit of the timeout argument
+     * @param unit the time unit of the timeout argument
      */
-    public static void shutdownAndAwaitTermination(ExecutorService service, long timeout, TimeUnit unit) {
+    public static void shutdownAndAwaitTermination(@Nullable ExecutorService service, long timeout, TimeUnit unit) {
+        if (service == null) {
+            return;
+        }
+
         long halfTimeoutNanos = unit.toNanos(timeout) / 2;
 
         // Disable new tasks from being submitted
@@ -557,12 +560,12 @@ public class IgniteUtils {
      * @throws Exception If failed to close.
      */
     public static void closeAll(Stream<? extends AutoCloseable> closeables) throws Exception {
-        AtomicReference<Exception> ex = new AtomicReference<>();
+        AtomicReference<Throwable> ex = new AtomicReference<>();
 
         closeables.filter(Objects::nonNull).forEach(closeable -> {
             try {
                 closeable.close();
-            } catch (Exception e) {
+            } catch (Throwable e) {
                 if (!ex.compareAndSet(null, e)) {
                     ex.get().addSuppressed(e);
                 }
@@ -570,7 +573,7 @@ public class IgniteUtils {
         });
 
         if (ex.get() != null) {
-            throw ex.get();
+            throw ExceptionUtils.sneakyThrow(ex.get());
         }
     }
 
@@ -597,6 +600,53 @@ public class IgniteUtils {
     }
 
     /**
+     * Closes all provided objects. If any of the {@link ManuallyCloseable#close} methods throw an exception, only the first thrown
+     * exception will be propagated to the caller, after all other objects are closed, similar to the try-with-resources block.
+     *
+     * @param closeables Stream of objects to close.
+     * @throws Exception If failed to close.
+     */
+    public static void closeAllManually(Stream<? extends ManuallyCloseable> closeables) throws Exception {
+        AtomicReference<Throwable> ex = new AtomicReference<>();
+
+        closeables.filter(Objects::nonNull).forEach(closeable -> {
+            try {
+                closeable.close();
+            } catch (Throwable e) {
+                if (!ex.compareAndSet(null, e)) {
+                    ex.get().addSuppressed(e);
+                }
+            }
+        });
+
+        if (ex.get() != null) {
+            throw ExceptionUtils.sneakyThrow(ex.get());
+        }
+    }
+
+    /**
+     * Closes all provided objects.
+     *
+     * @param closeables Collection of closeable objects to close.
+     * @throws Exception If failed to close.
+     * @see #closeAll(Collection)
+     */
+    public static void closeAllManually(Collection<? extends ManuallyCloseable> closeables) throws Exception {
+        closeAllManually(closeables.stream());
+    }
+
+    /**
+     * Closes all provided objects.
+     *
+     * @param closeables Array of closeable objects to close.
+     * @throws Exception If failed to close.
+     * @see #closeAll(Collection)
+     */
+    public static void closeAllManually(ManuallyCloseable... closeables) throws Exception {
+        closeAllManually(Arrays.stream(closeables));
+    }
+
+    /**
      * Short date format pattern for log messages in "quiet" mode. Only time is included since we don't expect "quiet" mode to be used for
      * longer runs.
      */
@@ -609,13 +659,14 @@ public class IgniteUtils {
      * @param msg Message to print with the stack.
      * @deprecated Calls to this method should never be committed to master.
      */
+    @Deprecated
     public static void dumpStack(IgniteLogger log, String msg, Object... params) {
-        String reason = "Dumping stack.";
+        String reason = "Dumping stack";
 
         var err = new Exception(IgniteStringFormatter.format(msg, params));
 
         if (log != null) {
-            log.error(reason, err);
+            log.warn(reason, err);
         } else {
             System.err.println("[" + LocalDateTime.now().format(SHORT_DATE_FMT) + "] (err) " + reason);
 
@@ -628,7 +679,7 @@ public class IgniteUtils {
      *
      * @param sourcePath The path to the file to move.
      * @param targetPath The path to the target file.
-     * @param log        Optional logger.
+     * @param log Optional logger.
      * @return The path to the target file.
      * @throws IOException If the source file cannot be moved to the target.
      */
@@ -643,40 +694,40 @@ public class IgniteUtils {
 
         try {
             success = Files.move(sourcePath, targetPath, StandardCopyOption.ATOMIC_MOVE);
-        } catch (final IOException e) {
+        } catch (IOException e) {
             // If it falls here that can mean many things. Either that the atomic move is not supported,
             // or something wrong happened. Anyway, let's try to be over-diagnosing
             if (log != null) {
                 if (e instanceof AtomicMoveNotSupportedException) {
-                    log.warn("Atomic move not supported. falling back to non-atomic move, error: {}.", e.getMessage());
+                    log.info("Atomic move not supported. Falling back to non-atomic move [reason={}]", e.getMessage());
                 } else {
-                    log.warn("Unable to move atomically, falling back to non-atomic move, error: {}.", e.getMessage());
+                    log.info("Unable to move atomically. Falling back to non-atomic move [reason={}]", e.getMessage());
                 }
 
                 if (targetPath.toFile().exists() && log.isInfoEnabled()) {
-                    log.info("The target file {} was already existing.", targetPath);
+                    log.info("The target file already exists [path={}]", targetPath);
                 }
             }
 
             try {
                 success = Files.move(sourcePath, targetPath, StandardCopyOption.REPLACE_EXISTING);
-            } catch (final IOException e1) {
+            } catch (IOException e1) {
                 e1.addSuppressed(e);
 
                 if (log != null) {
-                    log.warn("Unable to move {} to {}. Attempting to delete {} and abandoning.",
+                    log.warn("Unable to move file. Going to delete source [sourcePath={}, targetPath={}]",
                             sourcePath,
-                            targetPath,
-                            sourcePath);
+                            targetPath
+                    );
                 }
 
                 try {
                     Files.deleteIfExists(sourcePath);
-                } catch (final IOException e2) {
+                } catch (IOException e2) {
                     e2.addSuppressed(e1);
 
                     if (log != null) {
-                        log.warn("Unable to delete {}, good bye then!", sourcePath);
+                        log.warn("Unable to delete file [path={}]", sourcePath);
                     }
 
                     throw e2;
@@ -697,7 +748,7 @@ public class IgniteUtils {
      * @param <O> Object type.
      * @return Object or default object.
      */
-    public static <O> O nonNullOrElse(O obj, O defaultObj) {
+    public static <O> O nonNullOrElse(@Nullable O obj, O defaultObj) {
         return (obj != null) ? obj : defaultObj;
     }
 
@@ -761,9 +812,489 @@ public class IgniteUtils {
                 worker.join();
             } catch (Exception e) {
                 if (log != null && log.isWarnEnabled()) {
-                    log.warn("Failed to cancel ignite worker [" + worker.toString() + "]: " + e.getMessage());
+                    log.debug("Unable to cancel ignite worker [worker={}, reason={}]", worker.toString(), e.getMessage());
                 }
             }
+        }
+    }
+
+    /**
+     * Method that runs the provided {@code fn} in {@code busyLock}.
+     *
+     * @param busyLock Component's busy lock.
+     * @param fn Function to run.
+     * @param <T> Type of returned value from {@code fn}.
+     * @return Result of the provided function.
+     * @throws IgniteInternalException with cause {@link NodeStoppingException} if {@link IgniteSpinBusyLock#enterBusy()} failed.
+     */
+    public static <T> T inBusyLock(IgniteSpinBusyLock busyLock, Supplier<T> fn) {
+        if (!busyLock.enterBusy()) {
+            throw new IgniteInternalException(NODE_STOPPING_ERR, new NodeStoppingException());
+        }
+        try {
+            return fn.get();
+        } finally {
+            busyLock.leaveBusy();
+        }
+    }
+
+    /**
+     * Method that runs the provided {@code fn} in {@code busyLock}.
+     *
+     * @param busyLock Component's busy lock.
+     * @param fn Function to run.
+     * @return Result of the provided function.
+     * @throws IgniteInternalException with cause {@link NodeStoppingException} if {@link IgniteSpinBusyLock#enterBusy()} failed.
+     */
+    public static int inBusyLock(IgniteSpinBusyLock busyLock, IntSupplier fn) {
+        if (!busyLock.enterBusy()) {
+            throw new IgniteInternalException(NODE_STOPPING_ERR, new NodeStoppingException());
+        }
+        try {
+            return fn.getAsInt();
+        } finally {
+            busyLock.leaveBusy();
+        }
+    }
+
+    /**
+     * Method that runs the provided {@code fn} in {@code busyLock}.
+     *
+     * @param busyLock Component's busy lock.
+     * @param fn Runnable to run.
+     * @throws IgniteInternalException with cause {@link NodeStoppingException} if {@link IgniteSpinBusyLock#enterBusy()} failed.
+     */
+    public static void inBusyLock(IgniteSpinBusyLock busyLock, Runnable fn) {
+        if (!busyLock.enterBusy()) {
+            throw new IgniteInternalException(NODE_STOPPING_ERR, new NodeStoppingException());
+        }
+        try {
+            fn.run();
+        } finally {
+            busyLock.leaveBusy();
+        }
+    }
+
+    /**
+     * Method that runs the provided {@code fn} in {@code busyLock}.
+     *
+     * @param <T> Type of returned value from {@code fn}.
+     * @param busyLock Component's busy lock.
+     * @param fn Function to run.
+     * @return Future returned from the {@code fn}, or future with the {@link NodeStoppingException} if
+     *         {@link IgniteSpinBusyLock#enterBusy()} failed or with runtime exception/error while executing the {@code fn}.
+     */
+    public static <T> CompletableFuture<T> inBusyLockAsync(IgniteSpinBusyLock busyLock, Supplier<CompletableFuture<T>> fn) {
+        if (!busyLock.enterBusy()) {
+            return failedFuture(new NodeStoppingException());
+        }
+
+        try {
+            return fn.get();
+        } catch (Throwable t) {
+            return failedFuture(t);
+        } finally {
+            busyLock.leaveBusy();
+        }
+    }
+
+    /**
+     * Method that runs the provided {@code fn} in {@code busyLock} if {@link IgniteSpinBusyLock#enterBusy()} succeed. Otherwise it just
+     * silently returns.
+     *
+     * @param busyLock Component's busy lock.
+     * @param fn Runnable to run.
+     */
+    public static void inBusyLockSafe(IgniteSpinBusyLock busyLock, Runnable fn) {
+        if (!busyLock.enterBusy()) {
+            return;
+        }
+        try {
+            fn.run();
+        } finally {
+            busyLock.leaveBusy();
+        }
+    }
+
+    /**
+     * Collects all the fields of given class which are defined as a public static within the specified class.
+     *
+     * @param sourceCls The class to lookup fields in.
+     * @param targetCls Type of the fields of interest.
+     * @return A mapping name to property itself.
+     */
+    public static <T> List<T> collectStaticFields(Class<?> sourceCls, Class<? extends T> targetCls) {
+        List<T> result = new ArrayList<>();
+
+        for (Field f : sourceCls.getDeclaredFields()) {
+            if (!targetCls.equals(f.getType())
+                    || !Modifier.isStatic(f.getModifiers())
+                    || !Modifier.isPublic(f.getModifiers())) {
+                continue;
+            }
+
+            try {
+                T value = targetCls.cast(f.get(sourceCls));
+
+                result.add(value);
+            } catch (IllegalAccessException e) {
+                // should not happen
+                throw new AssertionError(e);
+            }
+        }
+
+        return result;
+    }
+
+    /**
+     * Cancels the future and runs a consumer on future's result if it was completed before the cancellation. Does nothing if future is
+     * cancelled or completed exceptionally.
+     *
+     * @param future Future.
+     * @param consumer Consumer that accepts future's result.
+     * @param <T> Future's result type.
+     */
+    public static <T> void cancelOrConsume(CompletableFuture<T> future, Consumer<T> consumer) {
+        future.cancel(true);
+
+        if (future.isCancelled() || future.isCompletedExceptionally()) {
+            return;
+        }
+
+        assert future.isDone();
+
+        T res = future.join();
+
+        assert res != null;
+
+        consumer.accept(res);
+    }
+
+    /**
+     * Produce new MBean name according to received group and name.
+     *
+     * @param group pkg:group=value part of MBean name.
+     * @param name pkg:name=value part of MBean name.
+     * @return new ObjectName.
+     * @throws MalformedObjectNameException if MBean name can't be formed from the received arguments.
+     */
+    public static ObjectName makeMbeanName(String group, String name) throws MalformedObjectNameException {
+        return new ObjectName(String.format("%s:group=%s,name=%s", JMX_MBEAN_PACKAGE, group, name));
+    }
+
+    /**
+     * Filter the collection using the given predicate.
+     *
+     * @param collection Collection.
+     * @param predicate Predicate.
+     * @return Filtered list.
+     */
+    public static <T> List<T> filter(Collection<T> collection, Predicate<T> predicate) {
+        List<T> result = new ArrayList<>();
+
+        for (T e : collection) {
+            if (predicate.test(e)) {
+                result.add(e);
+            }
+        }
+
+        return result;
+    }
+
+    /**
+     * Find the first element in the given list.
+     *
+     * @param list List.
+     * @return Optional containing element (if present).
+     */
+    public static <T> Optional<T> findFirst(List<T> list) {
+        return list.isEmpty() ? Optional.empty() : Optional.of(list.get(0));
+    }
+
+    /**
+     * Find any element in given collection.
+     *
+     * @param collection Collection.
+     * @return Optional containing element (if present).
+     */
+    public static <T> Optional<T> findAny(Collection<T> collection) {
+        return findAny(collection, null);
+    }
+
+    /**
+     * Find any element in given collection for which the predicate returns {@code true}.
+     *
+     * @param collection Collection.
+     * @param predicate Predicate.
+     * @return Optional containing element (if present).
+     */
+    public static <T> Optional<T> findAny(Collection<T> collection, @Nullable Predicate<T> predicate) {
+        if (!collection.isEmpty()) {
+            for (Iterator<T> it = collection.iterator(); it.hasNext(); ) {
+                T t = it.next();
+
+                if (predicate == null || predicate.test(t)) {
+                    return Optional.ofNullable(t);
+                }
+            }
+        }
+
+        return Optional.empty();
+    }
+
+    /**
+     * Retries operation until it succeeds or fails with exception that is different than the given.
+     *
+     * @param operation Operation.
+     * @param stopRetryCondition Condition that accepts the exception if one has been thrown, and defines whether retries should be
+     *         stopped.
+     * @param executor Executor to make retry in.
+     * @return Future that is completed when operation is successful or failed with other exception than the given.
+     */
+    public static <T> CompletableFuture<T> retryOperationUntilSuccess(
+            Supplier<CompletableFuture<T>> operation,
+            Function<Throwable, Boolean> stopRetryCondition,
+            Executor executor
+    ) {
+        CompletableFuture<T> fut = new CompletableFuture<>();
+
+        retryOperationUntilSuccess(operation, stopRetryCondition, fut, executor);
+
+        return fut;
+    }
+
+    /**
+     * Retries operation until it succeeds or fails with exception that is different than the given.
+     *
+     * @param operation Operation.
+     * @param stopRetryCondition Condition that accepts the exception if one has been thrown, and defines whether retries should be
+     *         stopped.
+     * @param executor Executor to make retry in.
+     * @param fut Future that is completed when operation is successful or failed with other exception than the given.
+     */
+    public static <T> void retryOperationUntilSuccess(
+            Supplier<CompletableFuture<T>> operation,
+            Function<Throwable, Boolean> stopRetryCondition,
+            CompletableFuture<T> fut,
+            Executor executor
+    ) {
+        operation.get()
+                .whenComplete((res, e) -> {
+                    if (e == null) {
+                        fut.complete(res);
+                    } else {
+                        if (stopRetryCondition.apply(e)) {
+                            fut.completeExceptionally(e);
+                        } else {
+                            executor.execute(() -> retryOperationUntilSuccess(operation, stopRetryCondition, fut, executor));
+                        }
+                    }
+                });
+    }
+
+    /**
+     * Utility method to check if one byte array starts with a specified sequence of bytes.
+     *
+     * @param key The array to check.
+     * @param prefix The prefix bytes to test for.
+     * @return {@code true} if the key starts with the bytes from the prefix.
+     */
+    public static boolean startsWith(byte[] key, byte[] prefix) {
+        return key.length >= prefix.length
+                && Arrays.equals(key, 0, prefix.length, prefix, 0, prefix.length);
+    }
+
+    /**
+     * Serializes collection to bytes.
+     *
+     * @param collection Collection.
+     * @param transform Tranform function for the collection element.
+     * @return Byte array.
+     */
+    public static <T> byte[] collectionToBytes(Collection<T> collection, Function<T, byte[]> transform) {
+        int bytesObjects = 0;
+        List<byte[]> objects = new ArrayList<>();
+
+        for (T o : collection) {
+            byte[] b = transform.apply(o);
+            objects.add(b);
+            bytesObjects += b.length;
+        }
+
+        bytesObjects += Integer.BYTES;
+        ByteBuffer buf = ByteBuffer.allocate(bytesObjects).order(ByteOrder.LITTLE_ENDIAN);
+
+        buf.putInt(objects.size());
+
+        for (byte[] o : objects) {
+            buf.put(o);
+        }
+
+        return buf.array();
+    }
+
+    /**
+     * Deserializes the list from byte buffer. Requires little-endian byte order.
+     *
+     * @param buf Byte buffer.
+     * @param transform Transform function to create list element.
+     * @return List.
+     */
+    public static <T> List<T> bytesToList(ByteBuffer buf, Function<ByteBuffer, T> transform) {
+        int length = buf.getInt();
+        assert length >= 0 : "Negative collection size: " + length;
+
+        List<T> result = new ArrayList<>(length);
+
+        for (int i = 0; i < length; i++) {
+            assert buf.position() < buf.limit() : "Can't read an object from the given buffer [position=" + buf.position()
+                    + ", limit=" + buf.limit() + ']';
+
+            result.add(transform.apply(buf));
+        }
+
+        return result;
+    }
+
+    /**
+     * Converts byte buffer into a byte array. The content of the array is all bytes from the position "0" to "capacity". Preserves original
+     * position/limit values in the buffer. Always returns a new instance, instead of accessing the internal buffer's array.
+     */
+    public static byte[] byteBufferToByteArray(ByteBuffer buffer) {
+        if (buffer.hasArray()) {
+            int offset = buffer.arrayOffset();
+
+            return copyOfRange(buffer.array(), offset, offset + buffer.capacity());
+        } else {
+            byte[] array = new byte[buffer.capacity()];
+
+            int originalPosition = buffer.position();
+
+            buffer.position(0);
+            buffer.get(array);
+
+            buffer.position(originalPosition);
+
+            return array;
+        }
+    }
+
+    private static CompletableFuture<Void> startAsync(ComponentContext componentContext, Stream<? extends IgniteComponent> components) {
+        return allOf(components
+                .filter(Objects::nonNull)
+                .map(component -> component.startAsync(componentContext))
+                .toArray(CompletableFuture[]::new));
+    }
+
+    /**
+     * Asynchronously starts all ignite components.
+     *
+     * @param componentContext Ignite component context.
+     * @param components Array of ignite components to start, may contain {@code null} elements.
+     * @return CompletableFuture that will be completed when all components are started.
+     */
+    public static CompletableFuture<Void> startAsync(ComponentContext componentContext, @Nullable IgniteComponent... components) {
+        return startAsync(componentContext, Stream.of(components));
+    }
+
+    /**
+     * Asynchronously starts all ignite components.
+     *
+     * @param componentContext Ignite component context.
+     * @param components Collection of ignite components to start.
+     * @return CompletableFuture that will be completed when all components are started.
+     */
+    public static CompletableFuture<Void> startAsync(ComponentContext componentContext, Collection<? extends IgniteComponent> components) {
+        return startAsync(componentContext, components.stream());
+    }
+
+    private static CompletableFuture<Void> stopAsync(ComponentContext componentContext, Stream<? extends IgniteComponent> components) {
+        return allOf(components
+                .filter(Objects::nonNull)
+                .map(igniteComponent -> {
+                    try {
+                        return igniteComponent.stopAsync(componentContext);
+                    } catch (Throwable e) {
+                        // Make sure a failure in the synchronous part will not interrupt the stopping process of other components.
+                        return failedFuture(e);
+                    }
+                })
+                .toArray(CompletableFuture[]::new));
+    }
+
+    /**
+     * Asynchronously exec all stop functions.
+     *
+     * @param components Array of stop functions.
+     * @return CompletableFuture that will be completed when all components are stopped.
+     */
+    public static CompletableFuture<Void> stopAsync(Supplier<CompletableFuture<Void>>... components) {
+        return allOf(Stream.of(components)
+                .filter(Objects::nonNull)
+                .map(igniteComponent -> {
+                    try {
+                        return igniteComponent.get();
+                    } catch (Throwable e) {
+                        // Make sure a failure in the synchronous part will not interrupt the stopping process of other components.
+                        return failedFuture(e);
+                    }
+                })
+                .toArray(CompletableFuture[]::new));
+    }
+
+    /**
+     * Asynchronously stops all ignite components.
+     *
+     * @param componentContext Ignite component context.
+     * @param components Array of ignite components to stop, may contain {@code null} elements.
+     * @return CompletableFuture that will be completed when all components are stopped.
+     */
+    public static CompletableFuture<Void> stopAsync(ComponentContext componentContext, @Nullable IgniteComponent... components) {
+        return stopAsync(componentContext, Stream.of(components));
+    }
+
+    /**
+     * Asynchronously stops all ignite components.
+     *
+     * @param componentContext Ignite component context.
+     * @param components Collection of ignite components to stop.
+     * @return CompletableFuture that will be completed when all components are stopped.
+     */
+    public static CompletableFuture<Void> stopAsync(ComponentContext componentContext, Collection<? extends IgniteComponent> components) {
+        return stopAsync(componentContext, components.stream());
+    }
+
+    /**
+     * The method checks the list of allowed operations in the current thread and returns false if the thread is fit to continue or true if
+     * we must switch to another.
+     *
+     * @param requiredOperationPermissions Set of thread operations that have to be supported by the current thread.
+     * @return True if we have to switch to a specific pool, otherwise we can continue in the current thread.
+     */
+    public static boolean shouldSwitchToRequestsExecutor(ThreadOperation... requiredOperationPermissions) {
+        if (Thread.currentThread() instanceof ThreadAttributes) {
+            ThreadAttributes thread = (ThreadAttributes) Thread.currentThread();
+
+            for (ThreadOperation op : requiredOperationPermissions) {
+                if (!thread.allows(op)) {
+                    return true;
+                }
+            }
+
+            return false;
+        } else {
+            if (PublicApiThreading.executingSyncPublicApi()) {
+                // It's a user thread, it executes a sync public API call, so it can do anything, no switch is needed.
+                return false;
+            }
+            if (PublicApiThreading.executingAsyncPublicApi()) {
+                // It's a user thread, it executes an async public API call, so it cannot do anything, a switch is needed.
+                return true;
+            }
+
+            // It's something else: either a JRE thread or an Ignite thread not marked with ThreadAttributes. As we are not sure,
+            // let's switch: false negative can produce assertion errors.
+            return true;
         }
     }
 }

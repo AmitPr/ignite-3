@@ -1,12 +1,12 @@
 /*
  * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
+ * contributor license agreements. See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.
  * The ASF licenses this file to You under the Apache License, Version 2.0
  * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+ * the License. You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *      http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -21,6 +21,8 @@ import java.util.Set;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+import org.apache.ignite.internal.logger.IgniteLogger;
+import org.apache.ignite.internal.logger.Loggers;
 import org.apache.ignite.internal.thread.NamedThreadFactory;
 import org.apache.ignite.raft.jraft.util.ExecutorServiceHelper;
 import org.apache.ignite.raft.jraft.util.Requires;
@@ -30,6 +32,8 @@ import org.apache.ignite.raft.jraft.util.ThreadPoolUtil;
  *
  */
 public class DefaultTimer implements Timer {
+    private static final IgniteLogger LOG = Loggers.forClass(DefaultTimer.class);
+
     private final ScheduledExecutorService scheduledExecutorService;
 
     public DefaultTimer(int workerNum, String name) {
@@ -37,7 +41,7 @@ public class DefaultTimer implements Timer {
             .coreThreads(workerNum) //
             .poolName(name) //
             .enableMetric(true) //
-            .threadFactory(new NamedThreadFactory(name, true)) //
+            .threadFactory(new NamedThreadFactory(name, true, LOG)) //
             .build();
     }
 

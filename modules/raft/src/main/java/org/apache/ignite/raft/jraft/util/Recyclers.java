@@ -5,7 +5,7 @@
  * "License"); you may not use this file except in compliance with the License. You may obtain a
  * copy of the License at:
  *
- * http://www.apache.org/licenses/LICENSE-2.0
+ *      http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software distributed under the License
  * is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
@@ -19,7 +19,8 @@ import java.util.Arrays;
 import java.util.Map;
 import java.util.WeakHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
-import org.apache.ignite.lang.IgniteLogger;
+import org.apache.ignite.internal.logger.IgniteLogger;
+import org.apache.ignite.internal.logger.Loggers;
 
 /**
  * Light-weight object pool based on a thread-local stack.
@@ -29,7 +30,7 @@ import org.apache.ignite.lang.IgniteLogger;
  * @param <T> the type of the pooled object
  */
 public abstract class Recyclers<T> {
-    private static final IgniteLogger LOG = IgniteLogger.forClass(Recyclers.class);
+    private static final IgniteLogger LOG = Loggers.forClass(Recyclers.class);
 
     private static final AtomicInteger idGenerator = new AtomicInteger(Integer.MIN_VALUE);
 

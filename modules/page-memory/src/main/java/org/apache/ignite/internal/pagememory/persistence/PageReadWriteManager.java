@@ -1,10 +1,10 @@
 /*
  * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
+ * contributor license agreements. See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.
  * The ASF licenses this file to You under the Apache License, Version 2.0
  * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+ * the License. You may obtain a copy of the License at
  *
  *      http://www.apache.org/licenses/LICENSE-2.0
  *
@@ -18,9 +18,9 @@
 package org.apache.ignite.internal.pagememory.persistence;
 
 import java.nio.ByteBuffer;
+import org.apache.ignite.internal.lang.IgniteInternalCheckedException;
 import org.apache.ignite.internal.pagememory.PageIdAllocator;
 import org.apache.ignite.internal.pagememory.persistence.store.PageStore;
-import org.apache.ignite.lang.IgniteInternalCheckedException;
 
 /**
  * Page store manager.
@@ -43,12 +43,11 @@ public interface PageReadWriteManager {
      * @param grpId Group ID, may be {@code 0} if the page is a meta page.
      * @param pageId Page ID.
      * @param pageBuf Page buffer to write from.
-     * @param tag Partition page store version, 1-based incrementing counter.
      * @param calculateCrc If {@code false} crc calculation will be forcibly skipped.
      * @return Page store where the page was written to.
      * @throws IgniteInternalCheckedException If failed to write page.
      */
-    PageStore write(int grpId, long pageId, ByteBuffer pageBuf, int tag, boolean calculateCrc) throws IgniteInternalCheckedException;
+    PageStore write(int grpId, long pageId, ByteBuffer pageBuf, boolean calculateCrc) throws IgniteInternalCheckedException;
 
     /**
      * Allocates a page for the given page space.

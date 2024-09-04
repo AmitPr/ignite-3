@@ -1,10 +1,10 @@
 /*
  * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
+ * contributor license agreements. See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.
  * The ASF licenses this file to You under the Apache License, Version 2.0
  * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+ * the License. You may obtain a copy of the License at
  *
  *      http://www.apache.org/licenses/LICENSE-2.0
  *
@@ -86,7 +86,7 @@ class IgniteSpinReadWriteLockTest {
     private void assertThatWriteLockAcquireAttemptBlocksForever() {
         Future<?> future = executor.submit(lock::writeLock);
 
-        assertThrows(TimeoutException.class, () -> future.get(500, TimeUnit.MILLISECONDS));
+        assertThrows(TimeoutException.class, () -> future.get(100, TimeUnit.MILLISECONDS));
     }
 
     @Test
@@ -146,7 +146,7 @@ class IgniteSpinReadWriteLockTest {
     private void assertThatReadLockAcquireAttemptBlocksForever() {
         Future<?> readLockAttemptFuture = executor.submit(lock::readLock);
 
-        assertThrows(TimeoutException.class, () -> readLockAttemptFuture.get(500, TimeUnit.MILLISECONDS));
+        assertThrows(TimeoutException.class, () -> readLockAttemptFuture.get(100, TimeUnit.MILLISECONDS));
     }
 
     @Test
@@ -188,7 +188,7 @@ class IgniteSpinReadWriteLockTest {
     private void assertThatWriteLockAcquireAttemptWithoutSleepsBlocksForever() {
         Future<?> future = executor.submit(lock::writeLockBusy);
 
-        assertThrows(TimeoutException.class, () -> future.get(500, TimeUnit.MILLISECONDS));
+        assertThrows(TimeoutException.class, () -> future.get(100, TimeUnit.MILLISECONDS));
     }
 
     @Test

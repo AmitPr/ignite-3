@@ -4,7 +4,7 @@
  * this work for additional information regarding copyright ownership.
  * The ASF licenses this file to You under the Apache License, Version 2.0
  * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+ * the License. You may obtain a copy of the License at
  *
  *      http://www.apache.org/licenses/LICENSE-2.0
  *
@@ -17,25 +17,33 @@
 
 package org.apache.ignite.internal.app;
 
+import static java.util.Collections.reverse;
+import static java.util.concurrent.CompletableFuture.allOf;
+import static org.apache.ignite.internal.util.IgniteUtils.stopAsync;
+
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicReference;
+import org.apache.ignite.internal.lang.NodeStoppingException;
+import org.apache.ignite.internal.logger.IgniteLogger;
+import org.apache.ignite.internal.logger.Loggers;
+import org.apache.ignite.internal.manager.ComponentContext;
 import org.apache.ignite.internal.manager.IgniteComponent;
-import org.apache.ignite.internal.util.ReverseIterator;
-import org.apache.ignite.lang.IgniteLogger;
-import org.apache.ignite.lang.NodeStoppingException;
+import org.apache.ignite.internal.rest.api.node.State;
+import org.apache.ignite.internal.rest.node.StateProvider;
 
 /**
  * Class for managing the lifecycle of Ignite components.
  */
-class LifecycleManager {
-    private static final IgniteLogger LOG = IgniteLogger.forClass(LifecycleManager.class);
+class LifecycleManager implements StateProvider {
+    private static final IgniteLogger LOG = Loggers.forClass(LifecycleManager.class);
 
     /** Ignite node name. */
     private final String nodeName;
 
     /** Node status. Needed for handling stop a starting node. */
-    private final AtomicReference<Status> status = new AtomicReference<>(Status.STARTING);
+    private final AtomicReference<State> status = new AtomicReference<>(State.STARTING);
 
     /**
      * List of started Ignite components.
@@ -44,95 +52,127 @@ class LifecycleManager {
      */
     private final List<IgniteComponent> startedComponents = new ArrayList<>();
 
-    /** Node state. */
-    private enum Status {
-        STARTING,
-        STARTED,
-        STOPPING
-    }
+    private final List<CompletableFuture<Void>> allComponentsStartFuture = new ArrayList<>();
+
+    private final CompletableFuture<Void> stopFuture = new CompletableFuture<>();
 
     LifecycleManager(String nodeName) {
         this.nodeName = nodeName;
     }
 
+    @Override
+    public State getState() {
+        return status.get();
+    }
+
     /**
-     * Starts a given components unless the node is in {@link Status#STOPPING} state, in which case a {@link NodeStoppingException} will be
+     * Starts a given components unless the node is in {@link State#STOPPING} state, in which case a {@link NodeStoppingException} will be
      * thrown.
      *
      * @param component Ignite component to start.
+     * @param componentContext Component context.
+     * @return Future that will be completed when the asynchronous part of the start is processed.
      * @throws NodeStoppingException If node stopping intention was detected.
      */
-    void startComponent(IgniteComponent component) throws NodeStoppingException {
-        if (status.get() == Status.STOPPING) {
+    CompletableFuture<Void> startComponentAsync(IgniteComponent component, ComponentContext componentContext)
+            throws NodeStoppingException {
+        if (status.get() == State.STOPPING) {
             throw new NodeStoppingException("Node=[" + nodeName + "] was stopped");
         }
 
         synchronized (this) {
             startedComponents.add(component);
 
-            component.start();
+            CompletableFuture<Void> future = component.startAsync(componentContext);
+            allComponentsStartFuture.add(future);
+            return future;
         }
     }
 
     /**
-     * Similar to {@link #startComponent} but allows to start multiple components at once.
+     * Similar to {@link #startComponentAsync} but allows to start multiple components at once.
      *
+     * @param componentContext Component context.
      * @param components Ignite components to start.
+     * @return Future that will be completed when all the components are started.
      * @throws NodeStoppingException If node stopping intention was detected.
      */
-    void startComponents(IgniteComponent... components) throws NodeStoppingException {
-        for (IgniteComponent component : components) {
-            startComponent(component);
+    CompletableFuture<Void> startComponentsAsync(ComponentContext componentContext, IgniteComponent... components)
+            throws NodeStoppingException {
+        CompletableFuture<?>[] futures = new CompletableFuture[components.length];
+        for (int i = 0; i < components.length; i++) {
+            futures[i] = startComponentAsync(components[i], componentContext);
         }
+        return allOf(futures);
     }
 
     /**
-     * Callback that should be called after the node has joined a cluster. After this method completes,
-     * the node will be transferred to the {@link Status#STARTED} state.
+     * Callback that should be called after the node has joined a cluster. After this method completes, the node will be transferred to the
+     * {@link State#STARTED} state.
      *
      * @throws NodeStoppingException If node stopping intention was detected.
      */
     void onStartComplete() throws NodeStoppingException {
-        LOG.info("Start complete, transferring to {} state", Status.STARTED);
+        LOG.info("Start complete");
 
-        Status currentStatus = status.compareAndExchange(Status.STARTING, Status.STARTED);
+        State currentStatus = status.compareAndExchange(State.STARTING, State.STARTED);
 
-        if (currentStatus == Status.STOPPING) {
+        if (currentStatus == State.STOPPING) {
             throw new NodeStoppingException();
-        } else if (currentStatus != Status.STARTING) {
+        } else if (currentStatus != State.STARTING) {
             throw new IllegalStateException("Unexpected node status: " + currentStatus);
         }
     }
 
     /**
-     * Stops all started components and transfers the node into the {@link Status#STOPPING} state.
+     * Represents future that will be completed when all components start futures will be completed. Note that it is designed that this
+     * method is called only once.
+     *
+     * @return Future that will be completed when all components start futures will be completed.
      */
-    void stopNode() {
-        Status currentStatus = status.getAndSet(Status.STOPPING);
-
-        if (currentStatus != Status.STOPPING) {
-            stopAllComponents();
-        }
+    synchronized CompletableFuture<Void> allComponentsStartFuture() {
+        return allOf(allComponentsStartFuture.toArray(CompletableFuture[]::new))
+                .whenComplete((v, e) -> {
+                    synchronized (this) {
+                        allComponentsStartFuture.clear();
+                    }
+                });
     }
 
     /**
-     * Calls {@link IgniteComponent#beforeNodeStop()} and then {@link IgniteComponent#stop()} for all components in start-reverse-order.
+     * Stops all started components and transfers the node into the {@link State#STOPPING} state.
+     *
+     * @param componentContext Component context.
      */
-    private synchronized void stopAllComponents() {
-        new ReverseIterator<>(startedComponents).forEachRemaining(component -> {
+    CompletableFuture<Void> stopNode(ComponentContext componentContext) {
+        State currentStatus = status.getAndSet(State.STOPPING);
+
+        if (currentStatus != State.STOPPING) {
+            stopAllComponents(componentContext);
+        }
+
+        return stopFuture;
+    }
+
+    /**
+     * Calls {@link IgniteComponent#beforeNodeStop()} and then {@link IgniteComponent#stopAsync(ComponentContext)} for all components in
+     * start-reverse-order.
+     *
+     * @param componentContext Component context.
+     */
+    private synchronized void stopAllComponents(ComponentContext componentContext) {
+        List<IgniteComponent> components = new ArrayList<>(startedComponents);
+        reverse(components);
+
+        for (IgniteComponent component : components) {
             try {
                 component.beforeNodeStop();
             } catch (Exception e) {
-                LOG.error("Unable to execute before node stop on the component=[{}] within node=[{}]", e, component, nodeName);
+                LOG.warn("Unable to execute before node stop [component={}, nodeName={}]", e, component, nodeName);
             }
-        });
+        }
 
-        new ReverseIterator<>(startedComponents).forEachRemaining(component -> {
-            try {
-                component.stop();
-            } catch (Exception e) {
-                LOG.error("Unable to stop component=[{}] within node=[{}]", e, component, nodeName);
-            }
-        });
+        stopAsync(componentContext, components)
+                .whenComplete((v, e) -> stopFuture.complete(null));
     }
 }

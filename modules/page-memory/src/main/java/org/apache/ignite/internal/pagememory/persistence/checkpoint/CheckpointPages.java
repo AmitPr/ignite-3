@@ -1,10 +1,10 @@
 /*
  * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
+ * contributor license agreements. See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.
  * The ASF licenses this file to You under the Apache License, Version 2.0
  * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+ * the License. You may obtain a copy of the License at
  *
  *      http://www.apache.org/licenses/LICENSE-2.0
  *
@@ -23,14 +23,14 @@ import java.util.Set;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
+import org.apache.ignite.internal.lang.IgniteInternalCheckedException;
 import org.apache.ignite.internal.pagememory.FullPageId;
-import org.apache.ignite.lang.IgniteInternalCheckedException;
 
 /**
  * View of pages which should be stored during current checkpoint.
  */
 public class CheckpointPages {
-    private final Set<FullPageId> segCheckpointPages;
+    private final Set<FullPageId> segmentPages;
 
     private final CompletableFuture<?> allowToReplace;
 
@@ -41,7 +41,7 @@ public class CheckpointPages {
      * @param replaceFuture The sign which allows replacing pages from a checkpoint by page replacer.
      */
     public CheckpointPages(Set<FullPageId> pages, CompletableFuture<?> replaceFuture) {
-        segCheckpointPages = pages;
+        segmentPages = pages;
         allowToReplace = replaceFuture;
     }
 
@@ -61,7 +61,7 @@ public class CheckpointPages {
             throw new IgniteInternalCheckedException(e);
         }
 
-        return segCheckpointPages.contains(fullPageId);
+        return segmentPages.contains(fullPageId);
     }
 
     /**
@@ -70,7 +70,7 @@ public class CheckpointPages {
      * @param fullPageId Page id for checking.
      */
     public boolean contains(FullPageId fullPageId) {
-        return segCheckpointPages.contains(fullPageId);
+        return segmentPages.contains(fullPageId);
     }
 
     /**
@@ -79,13 +79,13 @@ public class CheckpointPages {
      * @param fullPageId Page id which should be marked as saved to disk.
      */
     public boolean markAsSaved(FullPageId fullPageId) {
-        return segCheckpointPages.remove(fullPageId);
+        return segmentPages.remove(fullPageId);
     }
 
     /**
      * Returns size of all pages in current checkpoint.
      */
     public int size() {
-        return segCheckpointPages.size();
+        return segmentPages.size();
     }
 }

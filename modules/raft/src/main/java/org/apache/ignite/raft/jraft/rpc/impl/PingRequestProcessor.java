@@ -1,12 +1,12 @@
 /*
  * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
+ * contributor license agreements. See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.
  * The ASF licenses this file to You under the Apache License, Version 2.0
  * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+ * the License. You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *      http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -17,7 +17,8 @@
 package org.apache.ignite.raft.jraft.rpc.impl;
 
 import java.util.concurrent.Executor;
-import org.apache.ignite.lang.IgniteLogger;
+import org.apache.ignite.internal.logger.IgniteLogger;
+import org.apache.ignite.internal.logger.Loggers;
 import org.apache.ignite.raft.jraft.RaftMessagesFactory;
 import org.apache.ignite.raft.jraft.rpc.RaftRpcFactory;
 import org.apache.ignite.raft.jraft.rpc.RpcContext;
@@ -28,7 +29,7 @@ import org.apache.ignite.raft.jraft.rpc.RpcRequests.PingRequest;
  * Ping request processor.
  */
 public class PingRequestProcessor implements RpcProcessor<PingRequest> {
-    private static final IgniteLogger LOG = IgniteLogger.forClass(PingRequestProcessor.class);
+    private static final IgniteLogger LOG = Loggers.forClass(PingRequestProcessor.class);
     
     /** The executor */
     private final Executor executor;

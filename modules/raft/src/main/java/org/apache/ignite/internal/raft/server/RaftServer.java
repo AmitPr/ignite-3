@@ -1,12 +1,12 @@
 /*
  * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
+ * contributor license agreements. See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.
  * The ASF licenses this file to You under the Apache License, Version 2.0
  * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+ * the License. You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *      http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -20,10 +20,14 @@ package org.apache.ignite.internal.raft.server;
 import java.util.List;
 import java.util.Set;
 import org.apache.ignite.internal.manager.IgniteComponent;
-import org.apache.ignite.network.ClusterService;
-import org.apache.ignite.raft.client.Peer;
-import org.apache.ignite.raft.client.service.RaftGroupListener;
-import org.jetbrains.annotations.Nullable;
+import org.apache.ignite.internal.network.ClusterService;
+import org.apache.ignite.internal.raft.Peer;
+import org.apache.ignite.internal.raft.PeersAndLearners;
+import org.apache.ignite.internal.raft.RaftGroupEventsListener;
+import org.apache.ignite.internal.raft.RaftNodeId;
+import org.apache.ignite.internal.raft.service.RaftGroupListener;
+import org.apache.ignite.internal.replicator.ReplicationGroupId;
+import org.apache.ignite.raft.jraft.option.NodeOptions;
 import org.jetbrains.annotations.TestOnly;
 
 /**
@@ -35,51 +39,95 @@ public interface RaftServer extends IgniteComponent {
     /**
      * Returns cluster service.
      */
+    @TestOnly
     ClusterService clusterService();
 
     /**
-     * Starts a raft group bound to this cluster node.
+     * Starts a Raft node bound to this cluster node.
      *
-     * @param groupId     Group id.
-     * @param lsnr        The listener.
-     * @param initialConf Inititial group configuration.
+     * @param nodeId Raft node ID.
+     * @param configuration Raft configuration.
+     * @param lsnr Listener for state machine events.
+     * @param groupOptions Options to apply to the group.
+     * @return {@code true} if a group was successfully started, {@code false} if a group with given name already exists.
+     */
+    boolean startRaftNode(
+            RaftNodeId nodeId,
+            PeersAndLearners configuration,
+            RaftGroupListener lsnr,
+            RaftGroupOptions groupOptions
+    );
+
+    /**
+     * Starts a Raft group bound to this cluster node.
+     *
+     * @param nodeId Raft node ID.
+     * @param configuration Raft configuration.
+     * @param evLsnr Listener for group membership and other events.
+     * @param lsnr Listener for state machine events.
+     * @param groupOptions Options to apply to the group.
      * @return {@code True} if a group was successfully started, {@code False} when the group with given name is already exists.
      */
-    boolean startRaftGroup(String groupId, RaftGroupListener lsnr, List<Peer> initialConf);
+    boolean startRaftNode(
+            RaftNodeId nodeId,
+            PeersAndLearners configuration,
+            RaftGroupEventsListener evLsnr,
+            RaftGroupListener lsnr,
+            RaftGroupOptions groupOptions
+    );
 
     /**
-     * Starts a raft group bound to this cluster node.
+     * Check if the node is started.
      *
-     * @param groupId     Group id.
-     * @param evLsnr      Listener for group membership and other events.
-     * @param lsnr        Listener for state machine events.
-     * @param initialConf Inititial group configuration.
-     * @return {@code True} if a group was successfully started, {@code False} when the group with given name is already exists.
+     * @param nodeId Raft node ID.
+     * @return True if the node is started.
      */
-    boolean startRaftGroup(String groupId, RaftGroupEventsListener evLsnr,
-            RaftGroupListener lsnr, List<Peer> initialConf);
+    boolean isStarted(RaftNodeId nodeId);
 
     /**
-     * Synchronously stops a raft group if any.
+     * Stops a given local Raft node if it exists.
      *
-     * @param groupId Group id.
-     * @return {@code True} if a group was successfully stopped.
+     * @param nodeId Raft node ID.
+     * @return {@code true} if the node has been stopped, {@code false} otherwise.
      */
-    boolean stopRaftGroup(String groupId);
+    boolean stopRaftNode(RaftNodeId nodeId);
 
     /**
-     * Returns a local peer.
+     * Stops all local nodes running the given Raft group.
      *
-     * @param groupId Group id.
-     * @return Local peer or null if the group is not started.
+     * @param groupId Raft group ID.
+     * @return {@code true} if at least one node has been stopped, {@code false} otherwise.
      */
-    @Nullable Peer localPeer(String groupId);
+    boolean stopRaftNodes(ReplicationGroupId groupId);
 
     /**
-     * Returns a set of started partition groups.
+     * Destroys Raft group node storages (log storage, metadata storage and snapshots storage).
      *
-     * @return Started groups.
+     * @param nodeId ID of the Raft node.
+     * @param groupOptions Options for this group.
+     */
+    void destroyRaftNodeStorages(RaftNodeId nodeId, RaftGroupOptions groupOptions);
+
+    /**
+     * Returns local nodes running the given Raft group.
+     *
+     * @param groupId Raft group ID.
+     * @return List of peers (can be empty if no local Raft nodes have been started).
+     */
+    List<Peer> localPeers(ReplicationGroupId groupId);
+
+    /**
+     * Returns a set of locally running Raft nodes.
+     *
+     * @return Set of Raft node IDs (can be empty if no local Raft nodes have been started).
      */
     @TestOnly
-    Set<String> startedGroups();
+    Set<RaftNodeId> localNodes();
+
+    /**
+     * Get a raft server options.
+     *
+     * @return Raft server options.
+     */
+    NodeOptions options();
 }

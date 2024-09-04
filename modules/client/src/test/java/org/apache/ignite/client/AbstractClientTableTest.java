@@ -1,10 +1,10 @@
 /*
  * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
+ * contributor license agreements. See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.
  * The ASF licenses this file to You under the Apache License, Version 2.0
  * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+ * the License. You may obtain a copy of the License at
  *
  *      http://www.apache.org/licenses/LICENSE-2.0
  *
@@ -22,14 +22,13 @@ import static org.apache.ignite.client.fakes.FakeIgniteTables.TABLE_ONE_COLUMN;
 import static org.apache.ignite.client.fakes.FakeIgniteTables.TABLE_WITH_DEFAULT_VALUES;
 
 import java.math.BigDecimal;
-import java.math.BigInteger;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.util.Arrays;
-import java.util.BitSet;
 import java.util.Collection;
 import java.util.UUID;
+import org.apache.ignite.client.fakes.FakeIgniteTables;
 import org.apache.ignite.table.Table;
 import org.apache.ignite.table.Tuple;
 
@@ -89,27 +88,28 @@ public class AbstractClientTableTest extends AbstractClientTest {
     }
 
     protected Table defaultTable() {
-        server.tables().createTable(DEFAULT_TABLE, tbl -> tbl.changeReplicas(1));
+        if (server.tables().table(DEFAULT_TABLE) == null) {
+            ((FakeIgniteTables) server.tables()).createTable(DEFAULT_TABLE);
+        }
 
         return client.tables().table(DEFAULT_TABLE);
     }
 
     protected Table tableWithDefaultValues() {
         if (server.tables().table(TABLE_WITH_DEFAULT_VALUES) == null) {
-            server.tables().createTable(TABLE_WITH_DEFAULT_VALUES, tbl -> tbl.changeReplicas(1));
+            ((FakeIgniteTables) server.tables()).createTable(TABLE_WITH_DEFAULT_VALUES);
         }
 
         return client.tables().table(TABLE_WITH_DEFAULT_VALUES);
     }
 
-    protected static Tuple allClumnsTableKey(long id) {
+    protected static Tuple allColumnsTableKey(long id) {
         return Tuple.create().set("gid", id).set("id", String.valueOf(id));
     }
 
-    protected static Tuple allColumnsTableVal(String name) {
-        return Tuple.create()
-                .set("gid", DEFAULT_ID)
-                .set("id", String.valueOf(DEFAULT_ID))
+    protected static Tuple allColumnsTableVal(String name, boolean skipKey) {
+        var tuple = Tuple.create()
+                .set("zboolean", true)
                 .set("zbyte", (byte) 11)
                 .set("zshort", (short) 12)
                 .set("zint", (int) 13)
@@ -121,15 +121,21 @@ public class AbstractClientTableTest extends AbstractClientTest {
                 .set("ztimestamp", instant)
                 .set("zstring", name)
                 .set("zbytes", new byte[]{1, 2})
-                .set("zbitmask", BitSet.valueOf(new byte[]{32}))
                 .set("zdecimal", BigDecimal.valueOf(21))
-                .set("znumber", BigInteger.valueOf(22))
                 .set("zuuid", uuid);
+
+        if (!skipKey) {
+            tuple
+                    .set("gid", DEFAULT_ID)
+                    .set("id", String.valueOf(DEFAULT_ID));
+        }
+
+        return tuple;
     }
 
     protected Table fullTable() {
         if (server.tables().table(TABLE_ALL_COLUMNS) == null) {
-            server.tables().createTable(TABLE_ALL_COLUMNS, tbl -> tbl.changeReplicas(1));
+            ((FakeIgniteTables) server.tables()).createTable(TABLE_ALL_COLUMNS);
         }
 
         return client.tables().table(TABLE_ALL_COLUMNS);
@@ -141,7 +147,7 @@ public class AbstractClientTableTest extends AbstractClientTest {
 
     protected Table oneColumnTable() {
         if (server.tables().table(TABLE_ONE_COLUMN) == null) {
-            server.tables().createTable(TABLE_ONE_COLUMN, tbl -> tbl.changeReplicas(1));
+            ((FakeIgniteTables) server.tables()).createTable(TABLE_ONE_COLUMN);
         }
 
         return client.tables().table(TABLE_ONE_COLUMN);
@@ -167,6 +173,19 @@ public class AbstractClientTableTest extends AbstractClientTest {
         }
     }
 
+    /** Person without key. */
+    protected static class PersonValPojo {
+        public String name;
+
+        public PersonValPojo() {
+            // No-op.
+        }
+
+        public PersonValPojo(String name) {
+            this.name = name;
+        }
+    }
+
     /** Name column. */
     protected static class NamePojo {
         public String name;
@@ -176,27 +195,22 @@ public class AbstractClientTableTest extends AbstractClientTest {
     protected static class IncompletePojo {
         public byte zbyte;
         public String id;
-        public int gid;
+        public long gid;
         public String zstring;
         public byte[] zbytes;
     }
 
-    /** Partial column set. */
-    protected static class IncompletePojoNullable {
-        public int gid;
+    /** Composite key. */
+    protected static class CompositeKeyPojo {
         public String id;
-        public Byte zbyte;
-        public Short zshort;
-        public Integer zint;
-        public Long zlong;
-        public Float zfloat;
-        public Double zdouble;
+        public long gid;
     }
 
     /** Columns of all types. */
     protected static class AllColumnsPojo {
-        public int gid;
+        public long gid;
         public String id;
+        public boolean zboolean;
         public byte zbyte;
         public short zshort;
         public int zint;
@@ -209,9 +223,63 @@ public class AbstractClientTableTest extends AbstractClientTest {
         public String zstring;
         public byte[] zbytes;
         public UUID zuuid;
-        public BitSet zbitmask;
         public BigDecimal zdecimal;
-        public BigInteger znumber;
+    }
+
+    /** Columns of all types. */
+    protected static class AllColumnsPojoNullable {
+        public Long gid;
+        public String id;
+        public Boolean zboolean;
+        public Byte zbyte;
+        public Short zshort;
+        public Integer zint;
+        public Long zlong;
+        public Float zfloat;
+        public Double zdouble;
+        public LocalDate zdate;
+        public LocalTime ztime;
+        public Instant ztimestamp;
+        public String zstring;
+        public byte[] zbytes;
+        public UUID zuuid;
+        public BigDecimal zdecimal;
+    }
+
+    /** Columns of all types. */
+    protected static class AllColumnsValPojo {
+        public boolean zboolean;
+        public byte zbyte;
+        public short zshort;
+        public int zint;
+        public long zlong;
+        public float zfloat;
+        public double zdouble;
+        public LocalDate zdate;
+        public LocalTime ztime;
+        public Instant ztimestamp;
+        public String zstring;
+        public byte[] zbytes;
+        public UUID zuuid;
+        public BigDecimal zdecimal;
+    }
+
+    /** Columns of all types. */
+    protected static class AllColumnsValPojoNullable {
+        public Boolean zboolean;
+        public Byte zbyte;
+        public Short zshort;
+        public Integer zint;
+        public Long zlong;
+        public Float zfloat;
+        public Double zdouble;
+        public LocalDate zdate;
+        public LocalTime ztime;
+        public Instant ztimestamp;
+        public String zstring;
+        public byte[] zbytes;
+        public UUID zuuid;
+        public BigDecimal zdecimal;
     }
 
     /** Columns with default values. */
@@ -219,5 +287,13 @@ public class AbstractClientTableTest extends AbstractClientTest {
         public int id;
         public String str;
         public String strNonNull;
+        public Byte num;
+    }
+
+    /** Columns with default values. */
+    protected static class DefaultValuesValPojo {
+        public String str;
+        public String strNonNull;
+        public Byte num;
     }
 }

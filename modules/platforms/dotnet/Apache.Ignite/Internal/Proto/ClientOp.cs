@@ -22,6 +22,9 @@ namespace Apache.Ignite.Internal.Proto
     /// </summary>
     internal enum ClientOp
     {
+        /** None */
+        None = 0,
+
         /** Heartbeat. */
         Heartbeat = 1,
 
@@ -79,6 +82,9 @@ namespace Apache.Ignite.Internal.Proto
         /** Get and delete tuple. */
         TupleGetAndDelete = 32,
 
+        /** Contains tuple. */
+        TupleContainsKey = 33,
+
         /** Begin transaction. */
         TxBegin = 43,
 
@@ -95,6 +101,45 @@ namespace Apache.Ignite.Internal.Proto
         ClusterGetNodes = 48,
 
         /** Execute compute job. */
-        ComputeExecuteColocated = 49
+        ComputeExecuteColocated = 49,
+
+        /** Execute SQL query. */
+        SqlExec = 50,
+
+        /** Get next page. */
+        SqlCursorNextPage = 51,
+
+        /** Close cursor. */
+        SqlCursorClose = 52,
+
+        /** Get partition assignment. */
+        PartitionAssignmentGet = 53,
+
+        /** Execute SQL script. */
+        SqlExecScript = 56,
+
+        /** SQL parameter metadata. */
+        SqlParamMeta = 57,
+
+        /** Get compute job status. */
+        ComputeGetStatus = 59,
+
+        /** Cancel compute job. */
+        ComputeCancel = 60,
+
+        /** Change compute job priority. */
+        ComputeChangePriority = 61,
+
+        /** Send streamer batch. */
+        StreamerBatchSend = 62,
+
+        /** Execute MapReduce task. */
+        ComputeExecuteMapReduce = 64,
+
+        /** Get primary replicas. */
+        PrimaryReplicasGet = 65,
+
+        /** Send streamer batch with receiver. */
+        StreamerWithReceiverBatchSend = 66
     }
 }

@@ -1,10 +1,10 @@
 /*
  * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
+ * contributor license agreements. See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.
  * The ASF licenses this file to You under the Apache License, Version 2.0
  * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+ * the License. You may obtain a copy of the License at
  *
  *      http://www.apache.org/licenses/LICENSE-2.0
  *
@@ -18,6 +18,8 @@
 package org.apache.ignite.internal.configuration.processor;
 
 import static com.google.testing.compile.Compiler.javac;
+import static org.apache.ignite.internal.configuration.processor.ConfigurationProcessorUtils.getChangeName;
+import static org.apache.ignite.internal.configuration.processor.ConfigurationProcessorUtils.getViewName;
 
 import com.google.testing.compile.Compilation;
 import com.google.testing.compile.JavaFileObjects;
@@ -47,7 +49,7 @@ public class AbstractProcessorTest {
 
         List<JavaFileObject> fileObjects = fileNames.stream().map(JavaFileObjects::forResource).collect(Collectors.toList());
 
-        return javac().withProcessors(new Processor()).compile(fileObjects);
+        return javac().withProcessors(new ConfigurationProcessor()).compile(fileObjects);
     }
 
     /**
@@ -68,8 +70,8 @@ public class AbstractProcessorTest {
      * @return ConfigSet.
      */
     protected static ConfigSet getConfigSet(ClassName clazz, final Map<ClassName, JavaFileObject> generatedClasses) {
-        final ClassName viewName = Utils.getViewName(clazz);
-        final ClassName changeName = Utils.getChangeName(clazz);
+        final ClassName viewName = getViewName(clazz);
+        final ClassName changeName = getChangeName(clazz);
 
         final JavaFileObject viewClass = generatedClasses.get(viewName);
         final JavaFileObject changeClass = generatedClasses.get(changeName);

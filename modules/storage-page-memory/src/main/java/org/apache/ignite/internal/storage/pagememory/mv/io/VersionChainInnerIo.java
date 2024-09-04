@@ -1,10 +1,10 @@
 /*
  * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
+ * contributor license agreements. See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.
  * The ASF licenses this file to You under the Apache License, Version 2.0
  * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+ * the License. You may obtain a copy of the License at
  *
  *      http://www.apache.org/licenses/LICENSE-2.0
  *
@@ -17,14 +17,13 @@
 
 package org.apache.ignite.internal.storage.pagememory.mv.io;
 
-import static org.apache.ignite.internal.pagememory.util.PageUtils.getLong;
-import static org.apache.ignite.internal.pagememory.util.PageUtils.putLong;
+import static org.apache.ignite.internal.storage.pagememory.mv.MvPageTypes.T_VERSION_CHAIN_INNER_IO;
 
 import org.apache.ignite.internal.pagememory.io.IoVersions;
 import org.apache.ignite.internal.pagememory.tree.BplusTree;
 import org.apache.ignite.internal.pagememory.tree.io.BplusInnerIo;
 import org.apache.ignite.internal.pagememory.tree.io.BplusIo;
-import org.apache.ignite.internal.storage.pagememory.mv.VersionChainLink;
+import org.apache.ignite.internal.storage.pagememory.mv.VersionChainKey;
 import org.apache.ignite.internal.storage.pagememory.mv.VersionChainTree;
 
 /**
@@ -32,10 +31,7 @@ import org.apache.ignite.internal.storage.pagememory.mv.VersionChainTree;
  *
  * <p>Structure: link(long).
  */
-public class VersionChainInnerIo extends BplusInnerIo<VersionChainLink> implements VersionChainIo {
-    /** Page IO type. */
-    public static final short T_VERSION_CHAIN_INNER_IO = 10;
-
+public final class VersionChainInnerIo extends BplusInnerIo<VersionChainKey> implements VersionChainIo {
     /** I/O versions. */
     public static final IoVersions<VersionChainInnerIo> VERSIONS = new IoVersions<>(new VersionChainInnerIo(1));
 
@@ -44,43 +40,25 @@ public class VersionChainInnerIo extends BplusInnerIo<VersionChainLink> implemen
      *
      * @param ver Page format version.
      */
-    protected VersionChainInnerIo(int ver) {
-        super(T_VERSION_CHAIN_INNER_IO, ver, true, VersionChainLink.SIZE_IN_BYTES);
+    private VersionChainInnerIo(int ver) {
+        super(T_VERSION_CHAIN_INNER_IO, ver, true, SIZE_IN_BYTES);
     }
 
     /** {@inheritDoc} */
     @Override
-    public void store(long dstPageAddr, int dstIdx, BplusIo<VersionChainLink> srcIo, long srcPageAddr, int srcIdx) {
-        assertPageType(dstPageAddr);
-
-        long srcLink = link(srcPageAddr, srcIdx);
-
-        int dstOff = offset(dstIdx);
-
-        putLong(dstPageAddr, dstOff, srcLink);
+    public void store(long dstPageAddr, int dstIdx, BplusIo<VersionChainKey> srcIo, long srcPageAddr, int srcIdx) {
+        VersionChainIo.super.store(dstPageAddr, dstIdx, srcIo, srcPageAddr, srcIdx);
     }
 
     /** {@inheritDoc} */
     @Override
-    public void storeByOffset(long pageAddr, int off, VersionChainLink row) {
-        assertPageType(pageAddr);
-
-        putLong(pageAddr, off, row.link());
+    public void storeByOffset(long pageAddr, int off, VersionChainKey row) {
+        VersionChainIo.super.storeByOffset(pageAddr, off, row);
     }
 
     /** {@inheritDoc} */
     @Override
-    public VersionChainLink getLookupRow(BplusTree<VersionChainLink, ?> tree, long pageAddr, int idx) {
-        long link = link(pageAddr, idx);
-
-        return new VersionChainLink(link);
-    }
-
-    /** {@inheritDoc} */
-    @Override
-    public long link(long pageAddr, int idx) {
-        assert idx < getCount(pageAddr) : idx;
-
-        return getLong(pageAddr, offset(idx));
+    public VersionChainKey getLookupRow(BplusTree<VersionChainKey, ?> tree, long pageAddr, int idx) {
+        return getRow(pageAddr, idx, 0xFFFF);
     }
 }

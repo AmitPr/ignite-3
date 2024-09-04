@@ -1,12 +1,12 @@
 /*
  * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
+ * contributor license agreements. See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.
  * The ASF licenses this file to You under the Apache License, Version 2.0
  * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+ * the License. You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *      http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -18,9 +18,12 @@ package org.apache.ignite.raft.jraft.option;
 
 import java.util.List;
 import java.util.concurrent.ExecutorService;
-import org.apache.ignite.internal.raft.server.RaftGroupEventsListener;
-import org.apache.ignite.raft.jraft.util.TimeoutStrategy;
-import org.apache.ignite.raft.jraft.util.NoopTimeoutStrategy;
+import org.apache.ignite.internal.hlc.HybridClockImpl;
+import org.apache.ignite.internal.hlc.HybridClock;
+import org.apache.ignite.internal.metrics.sources.RaftMetricSource;
+import org.apache.ignite.internal.raft.JraftGroupEventsListener;
+import org.apache.ignite.internal.raft.Marshaller;
+import org.apache.ignite.internal.raft.storage.impl.StripeAwareLogManager.Stripe;
 import org.apache.ignite.raft.jraft.JRaftServiceFactory;
 import org.apache.ignite.raft.jraft.StateMachine;
 import org.apache.ignite.raft.jraft.conf.Configuration;
@@ -34,18 +37,22 @@ import org.apache.ignite.raft.jraft.disruptor.StripedDisruptor;
 import org.apache.ignite.raft.jraft.storage.SnapshotThrottle;
 import org.apache.ignite.raft.jraft.storage.impl.LogManagerImpl;
 import org.apache.ignite.raft.jraft.util.Copiable;
+import org.apache.ignite.raft.jraft.util.NoopTimeoutStrategy;
 import org.apache.ignite.raft.jraft.util.StringUtils;
+import org.apache.ignite.raft.jraft.util.TimeoutStrategy;
 import org.apache.ignite.raft.jraft.util.Utils;
 import org.apache.ignite.raft.jraft.util.concurrent.FixedThreadsExecutorGroup;
 import org.apache.ignite.raft.jraft.util.timer.Timer;
-import org.jetbrains.annotations.NotNull;
 
 /**
  * Node options.
  */
 public class NodeOptions extends RpcOptions implements Copiable<NodeOptions> {
-    /** This value is used by default to determine the count of stripes in the striped queue. */
-    public static final int DEFAULT_STRIPES = Utils.cpus() * 2;
+    /** This value is used by default to determine the count of stripes in the striped disruptors, excluding log manager disruptor. */
+    private static final int DEFAULT_STRIPES = Utils.cpus();
+
+    /** This value is used by default to determine the count of stripes for log manager. */
+    private static final int DEFAULT_LOG_STRIPES_COUNT = Math.min(4, DEFAULT_STRIPES);
 
     // A follower would become a candidate if it doesn't receive any message
     // from the leader in |election_timeout_ms| milliseconds
@@ -107,7 +114,10 @@ public class NodeOptions extends RpcOptions implements Copiable<NodeOptions> {
     private StateMachine fsm;
 
     // Listener for raft group reconfiguration events.
-    private RaftGroupEventsListener raftGrpEvtsLsnr;
+    private JraftGroupEventsListener raftGrpEvtsLsnr;
+
+    // Describe a specific LogStorage in format ${type}://${parameters}
+    private String logUri;
 
     // Describe a specific RaftMetaStorage in format ${type}://${parameters}
     private String raftMetaUri;
@@ -229,16 +239,54 @@ public class NodeOptions extends RpcOptions implements Copiable<NodeOptions> {
      */
     private StripedDisruptor<LogManagerImpl.StableClosureEvent> logManagerDisruptor;
 
+    /** A hybrid clock */
+    private HybridClock clock = new HybridClockImpl();
+
     /**
      * Amount of Disruptors that will handle the RAFT server.
      */
     private int stripes = DEFAULT_STRIPES;
 
+    /**
+     * Amount of log manager Disruptors stripes.
+     */
+    private int logStripesCount = DEFAULT_LOG_STRIPES_COUNT;
+
+    /**
+     * Set true to use the non-blocking strategy in the log manager.
+     */
+    private boolean logYieldStrategy;
+
     /** */
     private boolean sharedPools = false;
 
+    /** */
+    private List<Stripe> logStripes;
+
+    /**
+     * Apply task in blocking or non-blocking mode, ApplyTaskMode.NonBlocking by default.
+     */
+    private ApplyTaskMode applyTaskMode = ApplyTaskMode.NonBlocking;
+
+    private Marshaller commandsMarshaller;
+
+    private RaftMetricSource raftMetrics;
+
     public NodeOptions() {
         raftOptions.setRaftMessagesFactory(getRaftMessagesFactory());
+    }
+
+    /**
+    * Gets raft metrics.
+    *
+    * @return Raft metrics.
+    */
+    public RaftMetricSource getRaftMetrics() {
+        return raftMetrics;
+    }
+
+    public void setRaftMetrics(RaftMetricSource raftMetrics) {
+        this.raftMetrics = raftMetrics;
     }
 
     /**
@@ -256,6 +304,28 @@ public class NodeOptions extends RpcOptions implements Copiable<NodeOptions> {
     }
 
     /**
+     * @return Log stripes count.
+     */
+    public int getLogStripesCount() {
+        return logStripesCount;
+    }
+
+    /**
+     * @param logStripesCount Log stripes.
+     */
+    public void setLogStripesCount(int logStripesCount) {
+        this.logStripesCount = logStripesCount;
+    }
+
+    public boolean isLogYieldStrategy() {
+        return logYieldStrategy;
+    }
+
+    public void setLogYieldStrategy(boolean logYieldStrategy) {
+        this.logYieldStrategy = logYieldStrategy;
+    }
+
+    /**
      * Returns {@code true} if shared pools mode is in use.
      *
      * <p>In this mode thread pools are passed in the node options and node doesn't attempt to create/destroy any.
@@ -263,7 +333,7 @@ public class NodeOptions extends RpcOptions implements Copiable<NodeOptions> {
      * @return {@code true} if shared pools mode is in use.
      */
     public boolean isSharedPools() {
-        return sharedPools;
+        return this.sharedPools;
     }
 
     /**
@@ -273,12 +343,18 @@ public class NodeOptions extends RpcOptions implements Copiable<NodeOptions> {
         this.sharedPools = sharedPools;
     }
 
+    public ApplyTaskMode getApplyTaskMode() {
+        return this.applyTaskMode;
+    }
+
+    public void setApplyTaskMode(final ApplyTaskMode applyTaskMode) {
+        this.applyTaskMode = applyTaskMode;
+    }
+
     /**
      * Service factory.
      */
     public JRaftServiceFactory getServiceFactory() {
-        assert this.serviceFactory != null;
-
         return this.serviceFactory;
     }
 
@@ -348,6 +424,9 @@ public class NodeOptions extends RpcOptions implements Copiable<NodeOptions> {
     }
 
     public void validate() {
+        if (StringUtils.isBlank(this.logUri)) {
+            throw new IllegalArgumentException("Blank logUri");
+        }
         if (StringUtils.isBlank(this.raftMetaUri)) {
             throw new IllegalArgumentException("Blank raftMetaUri");
         }
@@ -357,7 +436,7 @@ public class NodeOptions extends RpcOptions implements Copiable<NodeOptions> {
     }
 
     public int getElectionPriority() {
-        return electionPriority;
+        return this.electionPriority;
     }
 
     public void setElectionPriority(int electionPriority) {
@@ -365,7 +444,7 @@ public class NodeOptions extends RpcOptions implements Copiable<NodeOptions> {
     }
 
     public int getDecayPriorityGap() {
-        return decayPriorityGap;
+        return this.decayPriorityGap;
     }
 
     public void setDecayPriorityGap(int decayPriorityGap) {
@@ -406,7 +485,7 @@ public class NodeOptions extends RpcOptions implements Copiable<NodeOptions> {
     }
 
     public int getSnapshotLogIndexMargin() {
-        return snapshotLogIndexMargin;
+        return this.snapshotLogIndexMargin;
     }
 
     public void setSnapshotLogIndexMargin(int snapshotLogIndexMargin) {
@@ -429,11 +508,11 @@ public class NodeOptions extends RpcOptions implements Copiable<NodeOptions> {
         this.initialConf = initialConf;
     }
 
-    public RaftGroupEventsListener getRaftGrpEvtsLsnr() {
+    public JraftGroupEventsListener getRaftGrpEvtsLsnr() {
         return raftGrpEvtsLsnr;
     }
 
-    public void setRaftGrpEvtsLsnr(@NotNull RaftGroupEventsListener raftGrpEvtsLsnr) {
+    public void setRaftGrpEvtsLsnr(JraftGroupEventsListener raftGrpEvtsLsnr) {
         this.raftGrpEvtsLsnr = raftGrpEvtsLsnr;
     }
 
@@ -443,6 +522,14 @@ public class NodeOptions extends RpcOptions implements Copiable<NodeOptions> {
 
     public void setFsm(final StateMachine fsm) {
         this.fsm = fsm;
+    }
+
+    public String getLogUri() {
+        return this.logUri;
+    }
+
+    public void setLogUri(final String logUri) {
+        this.logUri = logUri;
     }
 
     public String getRaftMetaUri() {
@@ -482,11 +569,11 @@ public class NodeOptions extends RpcOptions implements Copiable<NodeOptions> {
     }
 
     public ExecutorService getCommonExecutor() {
-        return commonExecutor;
+        return this.commonExecutor;
     }
 
     public FixedThreadsExecutorGroup getStripedExecutor() {
-        return stripedExecutor;
+        return this.stripedExecutor;
     }
 
     public void setStripedExecutor(FixedThreadsExecutorGroup stripedExecutor) {
@@ -494,7 +581,7 @@ public class NodeOptions extends RpcOptions implements Copiable<NodeOptions> {
     }
 
     public Scheduler getScheduler() {
-        return scheduler;
+        return this.scheduler;
     }
 
     public void setScheduler(Scheduler scheduler) {
@@ -502,7 +589,7 @@ public class NodeOptions extends RpcOptions implements Copiable<NodeOptions> {
     }
 
     public Timer getElectionTimer() {
-        return electionTimer;
+        return this.electionTimer;
     }
 
     public void setElectionTimer(Timer electionTimer) {
@@ -510,7 +597,7 @@ public class NodeOptions extends RpcOptions implements Copiable<NodeOptions> {
     }
 
     public Timer getVoteTimer() {
-        return voteTimer;
+        return this.voteTimer;
     }
 
     public void setVoteTimer(Timer voteTimer) {
@@ -518,7 +605,7 @@ public class NodeOptions extends RpcOptions implements Copiable<NodeOptions> {
     }
 
     public Timer getSnapshotTimer() {
-        return snapshotTimer;
+        return this.snapshotTimer;
     }
 
     public void setSnapshotTimer(Timer snapshotTimer) {
@@ -526,7 +613,7 @@ public class NodeOptions extends RpcOptions implements Copiable<NodeOptions> {
     }
 
     public Timer getStepDownTimer() {
-        return stepDownTimer;
+        return this.stepDownTimer;
     }
 
     public void setStepDownTimer(Timer stepDownTimer) {
@@ -534,7 +621,7 @@ public class NodeOptions extends RpcOptions implements Copiable<NodeOptions> {
     }
 
     public String getServerName() {
-        return serverName;
+        return this.serverName;
     }
 
     public void setServerName(String serverName) {
@@ -542,7 +629,7 @@ public class NodeOptions extends RpcOptions implements Copiable<NodeOptions> {
     }
 
     public StripedDisruptor<FSMCallerImpl.ApplyTask> getfSMCallerExecutorDisruptor() {
-        return fSMCallerExecutorDisruptor;
+        return this.fSMCallerExecutorDisruptor;
     }
 
     public void setfSMCallerExecutorDisruptor(StripedDisruptor<FSMCallerImpl.ApplyTask> fSMCallerExecutorDisruptor) {
@@ -550,7 +637,7 @@ public class NodeOptions extends RpcOptions implements Copiable<NodeOptions> {
     }
 
     public StripedDisruptor<NodeImpl.LogEntryAndClosure> getNodeApplyDisruptor() {
-        return nodeApplyDisruptor;
+        return this.nodeApplyDisruptor;
     }
 
     public void setNodeApplyDisruptor(StripedDisruptor<NodeImpl.LogEntryAndClosure> nodeApplyDisruptor) {
@@ -558,7 +645,7 @@ public class NodeOptions extends RpcOptions implements Copiable<NodeOptions> {
     }
 
     public StripedDisruptor<ReadOnlyServiceImpl.ReadIndexEvent> getReadOnlyServiceDisruptor() {
-        return readOnlyServiceDisruptor;
+        return this.readOnlyServiceDisruptor;
     }
 
     public void setReadOnlyServiceDisruptor(StripedDisruptor<ReadOnlyServiceImpl.ReadIndexEvent> readOnlyServiceDisruptor) {
@@ -566,11 +653,27 @@ public class NodeOptions extends RpcOptions implements Copiable<NodeOptions> {
     }
 
     public StripedDisruptor<LogManagerImpl.StableClosureEvent> getLogManagerDisruptor() {
-        return logManagerDisruptor;
+        return this.logManagerDisruptor;
     }
 
     public void setLogManagerDisruptor(StripedDisruptor<LogManagerImpl.StableClosureEvent> logManagerDisruptor) {
         this.logManagerDisruptor = logManagerDisruptor;
+    }
+
+    public void setLogStripes(List<Stripe> logStripes) {
+        this.logStripes = logStripes;
+    }
+
+    public List<Stripe> getLogStripes() {
+        return this.logStripes;
+    }
+
+    public HybridClock getClock() {
+        return this.clock;
+    }
+
+    public void setClock(HybridClock clock) {
+        this.clock = clock;
     }
 
     @Override
@@ -600,6 +703,7 @@ public class NodeOptions extends RpcOptions implements Copiable<NodeOptions> {
         nodeOptions.setfSMCallerExecutorDisruptor(this.getfSMCallerExecutorDisruptor());
         nodeOptions.setReadOnlyServiceDisruptor(this.getReadOnlyServiceDisruptor());
         nodeOptions.setLogManagerDisruptor(this.getLogManagerDisruptor());
+        nodeOptions.setLogStripes(this.getLogStripes());
         nodeOptions.setElectionTimer(this.getElectionTimer());
         nodeOptions.setVoteTimer(this.getVoteTimer());
         nodeOptions.setSnapshotTimer(this.getSnapshotTimer());
@@ -607,24 +711,29 @@ public class NodeOptions extends RpcOptions implements Copiable<NodeOptions> {
         nodeOptions.setSharedPools(this.isSharedPools());
         nodeOptions.setRpcDefaultTimeout(this.getRpcDefaultTimeout());
         nodeOptions.setRpcConnectTimeoutMs(this.getRpcConnectTimeoutMs());
+        nodeOptions.setRpcInstallSnapshotTimeout(this.getRpcInstallSnapshotTimeout());
         nodeOptions.setElectionTimeoutStrategy(this.getElectionTimeoutStrategy());
-        nodeOptions.setServiceFactory(this.getServiceFactory());
+        nodeOptions.setClock(this.getClock());
+        nodeOptions.setCommandsMarshaller(this.getCommandsMarshaller());
+        nodeOptions.setStripes(this.getStripes());
+        nodeOptions.setLogStripesCount(this.getLogStripesCount());
+        nodeOptions.setLogYieldStrategy(this.isLogYieldStrategy());
 
         return nodeOptions;
     }
 
-    @Override
     public String toString() {
-        return "NodeOptions{" + "electionTimeoutMs=" + electionTimeoutMs + ", electionPriority=" + electionPriority
-            + ", decayPriorityGap=" + decayPriorityGap + ", leaderLeaseTimeRatio=" + leaderLeaseTimeRatio
-            + ", snapshotIntervalSecs=" + snapshotIntervalSecs + ", snapshotLogIndexMargin="
-            + snapshotLogIndexMargin + ", catchupMargin=" + catchupMargin + ", initialConf=" + initialConf
-            + ", fsm=" + fsm + ", raftMetaUri='" + raftMetaUri + '\''
-            + ", snapshotUri='" + snapshotUri + '\'' + ", filterBeforeCopyRemote=" + filterBeforeCopyRemote
-            + ", disableCli=" + disableCli + ", timerPoolSize="
-            + timerPoolSize + ", cliRpcThreadPoolSize=" + cliRpcThreadPoolSize + ", raftRpcThreadPoolSize="
-            + raftRpcThreadPoolSize + ", enableMetrics=" + enableMetrics + ", snapshotThrottle=" + snapshotThrottle
-            + ", serviceFactory=" + serviceFactory + ", raftOptions=" + raftOptions + "} " + super.toString();
+        return "NodeOptions{" + "electionTimeoutMs=" + this.electionTimeoutMs + ", electionPriority="
+               + this.electionPriority + ", decayPriorityGap=" + this.decayPriorityGap + ", leaderLeaseTimeRatio="
+               + this.leaderLeaseTimeRatio + ", snapshotIntervalSecs=" + this.snapshotIntervalSecs
+               + ", snapshotLogIndexMargin=" + this.snapshotLogIndexMargin + ", catchupMargin=" + this.catchupMargin
+               + ", initialConf=" + this.initialConf + ", fsm=" + this.fsm + ", logUri='" + this.logUri + '\''
+               + ", raftMetaUri='" + this.raftMetaUri + '\'' + ", snapshotUri='" + this.snapshotUri + '\''
+               + ", filterBeforeCopyRemote=" + this.filterBeforeCopyRemote + ", disableCli=" + this.disableCli + ", timerPoolSize="
+               + this.timerPoolSize + ", cliRpcThreadPoolSize=" + this.cliRpcThreadPoolSize + ", raftRpcThreadPoolSize="
+               + this.raftRpcThreadPoolSize + ", enableMetrics=" + this.enableMetrics + ", snapshotThrottle="
+               + this.snapshotThrottle + ", serviceFactory=" + this.serviceFactory + ", applyTaskMode="
+               + this.applyTaskMode + ", raftOptions=" + this.raftOptions + "} " + super.toString();
     }
 
     /**
@@ -647,5 +756,13 @@ public class NodeOptions extends RpcOptions implements Copiable<NodeOptions> {
 
     public void setElectionTimeoutStrategy(TimeoutStrategy electionTimeoutStrategy) {
         this.electionTimeoutStrategy = electionTimeoutStrategy;
+    }
+
+    public Marshaller getCommandsMarshaller() {
+        return commandsMarshaller;
+    }
+
+    public void setCommandsMarshaller(Marshaller commandsMarshaller) {
+        this.commandsMarshaller = commandsMarshaller;
     }
 }

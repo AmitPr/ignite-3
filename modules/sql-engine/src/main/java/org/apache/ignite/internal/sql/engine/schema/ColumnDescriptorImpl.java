@@ -1,10 +1,10 @@
 /*
  * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
+ * contributor license agreements. See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.
  * The ASF licenses this file to You under the Apache License, Version 2.0
  * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+ * the License. You may obtain a copy of the License at
  *
  *      http://www.apache.org/licenses/LICENSE-2.0
  *
@@ -17,48 +17,89 @@
 
 package org.apache.ignite.internal.sql.engine.schema;
 
+import java.util.Objects;
 import java.util.function.Supplier;
-import org.apache.calcite.rel.type.RelDataType;
-import org.apache.ignite.internal.schema.NativeType;
-import org.apache.ignite.internal.sql.engine.type.IgniteTypeFactory;
-import org.apache.ignite.internal.sql.engine.util.Commons;
+import org.apache.ignite.internal.type.NativeType;
 import org.jetbrains.annotations.Nullable;
 
 /**
- * ColumnDescriptorImpl.
- * TODO Documentation https://issues.apache.org/jira/browse/IGNITE-15859
+ * Simple implementation of {@link ColumnDescriptor}.
  */
 public class ColumnDescriptorImpl implements ColumnDescriptor {
+    private static final Supplier<Object> NULL_SUPPLIER = () -> null;
+
+    private final boolean nullable;
+
     private final boolean key;
+    private final boolean hidden;
+    private final boolean virtual;
 
     private final String name;
 
-    private final @Nullable Supplier<Object> dfltVal;
+    private final Supplier<Object> dfltVal;
+
+    private final DefaultValueStrategy defaultStrategy;
 
     private final int logicalIndex;
-
-    private final int physicalIndex;
 
     private final NativeType storageType;
 
     /**
      * Constructor.
-     * TODO Documentation https://issues.apache.org/jira/browse/IGNITE-15859
+     *
+     * @param name The name of the column.
+     * @param key If {@code true}, this column will be considered as a part of PK.
+     * @param hidden If {@code true}, this column will not be expanded until explicitly mentioned.
+     * @param virtual If {@code true}, this column will not be stored.
+     * @param nullable If {@code true}, this column will be considered as a nullable.
+     * @param logicalIndex A 0-based index in a schema defined by a user.
+     * @param type Type of the value in the underlying storage.
+     * @param defaultStrategy A strategy to follow when generating value for column not specified in the INSERT statement.
+     * @param dfltVal A value generator to use when generating value for column not specified in the INSERT statement.
+     *               If {@link #defaultStrategy} is {@link DefaultValueStrategy#DEFAULT_NULL DEFAULT_NULL} then the passed supplier will
+     *               be ignored, thus may be {@code null}. In other cases value supplier MUST be specified.
      */
     public ColumnDescriptorImpl(
             String name,
             boolean key,
+            boolean hidden,
+            boolean virtual,
+            boolean nullable,
             int logicalIndex,
-            int physicalIndex,
-            NativeType storageType,
+            NativeType type,
+            DefaultValueStrategy defaultStrategy,
             @Nullable Supplier<Object> dfltVal
     ) {
         this.key = key;
+        this.hidden = hidden;
+        this.virtual = virtual;
+        this.nullable = nullable;
         this.name = name;
-        this.dfltVal = dfltVal;
+        this.defaultStrategy = defaultStrategy;
         this.logicalIndex = logicalIndex;
-        this.physicalIndex = physicalIndex;
-        this.storageType = storageType;
+        this.storageType = type;
+
+        this.dfltVal = defaultStrategy != DefaultValueStrategy.DEFAULT_NULL
+                ? Objects.requireNonNull(dfltVal, "dfltVal")
+                : NULL_SUPPLIER;
+    }
+
+    /** {@inheritDoc} */
+    @Override
+    public boolean hidden() {
+        return hidden;
+    }
+
+    /** {@inheritDoc} */
+    @Override
+    public boolean virtual() {
+        return virtual;
+    }
+
+    /** {@inheritDoc} */
+    @Override
+    public boolean nullable() {
+        return nullable;
     }
 
     /** {@inheritDoc} */
@@ -69,14 +110,14 @@ public class ColumnDescriptorImpl implements ColumnDescriptor {
 
     /** {@inheritDoc} */
     @Override
-    public boolean hasDefaultValue() {
-        return dfltVal != null;
+    public DefaultValueStrategy defaultStrategy() {
+        return defaultStrategy;
     }
 
     /** {@inheritDoc} */
     @Override
     public Object defaultValue() {
-        return dfltVal != null ? dfltVal.get() : null;
+        return dfltVal.get();
     }
 
     /** {@inheritDoc} */
@@ -89,18 +130,6 @@ public class ColumnDescriptorImpl implements ColumnDescriptor {
     @Override
     public int logicalIndex() {
         return logicalIndex;
-    }
-
-    /** {@inheritDoc} */
-    @Override
-    public int physicalIndex() {
-        return physicalIndex;
-    }
-
-    /** {@inheritDoc} */
-    @Override
-    public RelDataType logicalType(IgniteTypeFactory f) {
-        return f.createJavaType(Commons.nativeTypeToClass(storageType));
     }
 
     /** {@inheritDoc} */

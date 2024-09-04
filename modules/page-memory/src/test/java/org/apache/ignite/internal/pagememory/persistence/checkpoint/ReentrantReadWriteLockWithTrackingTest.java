@@ -1,10 +1,10 @@
 /*
  * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
+ * contributor license agreements. See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.
  * The ASF licenses this file to You under the Apache License, Version 2.0
  * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+ * the License. You may obtain a copy of the License at
  *
  *      http://www.apache.org/licenses/LICENSE-2.0
  *
@@ -28,8 +28,9 @@ import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.mock;
 
 import java.util.concurrent.TimeUnit;
-import org.apache.ignite.lang.IgniteInternalException;
-import org.apache.ignite.lang.IgniteLogger;
+import org.apache.ignite.internal.lang.IgniteInternalException;
+import org.apache.ignite.internal.logger.IgniteLogger;
+import org.apache.ignite.internal.testframework.BaseIgniteAbstractTest;
 import org.hamcrest.Matchers;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -37,9 +38,7 @@ import org.mockito.ArgumentCaptor;
 /**
  * For {@link ReentrantReadWriteLockWithTracking} testing.
  */
-public class ReentrantReadWriteLockWithTrackingTest {
-    private final IgniteLogger log = IgniteLogger.forClass(getClass());
-
+public class ReentrantReadWriteLockWithTrackingTest extends BaseIgniteAbstractTest {
     @Test
     void testIsWriteLockedByCurrentThread() throws Exception {
         ReentrantReadWriteLockWithTracking lock0 = new ReentrantReadWriteLockWithTracking();
@@ -168,8 +167,9 @@ public class ReentrantReadWriteLockWithTrackingTest {
 
         ArgumentCaptor<String> msgArgumentCaptor = ArgumentCaptor.forClass(String.class);
         ArgumentCaptor<Throwable> throwableArgumentCaptor = ArgumentCaptor.forClass(Throwable.class);
+        ArgumentCaptor<Object[]> objectArrayArgumentCaptor = ArgumentCaptor.forClass(Object[].class);
 
-        doNothing().when(log).warn(msgArgumentCaptor.capture(), throwableArgumentCaptor.capture());
+        doNothing().when(log).warn(msgArgumentCaptor.capture(), throwableArgumentCaptor.capture(), objectArrayArgumentCaptor.capture());
 
         ReentrantReadWriteLockWithTracking lock0 = new ReentrantReadWriteLockWithTracking(log, 20);
         ReentrantReadWriteLockWithTracking lock1 = new ReentrantReadWriteLockWithTracking(log, 200);
@@ -185,7 +185,7 @@ public class ReentrantReadWriteLockWithTrackingTest {
         assertThat(msgArgumentCaptor.getAllValues(), hasSize(1));
         assertThat(throwableArgumentCaptor.getAllValues(), hasSize(1));
 
-        assertThat(msgArgumentCaptor.getValue(), Matchers.startsWith("ReadLock held the lock more than"));
+        assertThat(msgArgumentCaptor.getValue(), Matchers.startsWith("ReadLock held for too long"));
         assertThat(throwableArgumentCaptor.getValue(), instanceOf(IgniteInternalException.class));
     }
 }

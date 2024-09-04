@@ -15,13 +15,12 @@
  * limitations under the License.
  */
 
-// XMLDoc check fails on older SDKs: https://github.com/dotnet/roslyn/issues/44571.
-#pragma warning disable CS1572
-#pragma warning disable CS1573
 namespace Apache.Ignite.Internal
 {
     using System;
+    using System.Collections.Generic;
     using Ignite.Network;
+    using Network;
 
     /// <summary>
     /// Socket connection context.
@@ -29,5 +28,20 @@ namespace Apache.Ignite.Internal
     /// <param name="Version">Protocol version.</param>
     /// <param name="IdleTimeout">Server idle timeout.</param>
     /// <param name="ClusterNode">Cluster node.</param>
-    internal record ConnectionContext(ClientProtocolVersion Version, TimeSpan IdleTimeout, IClusterNode ClusterNode);
+    /// <param name="ClusterIds">Cluster ids, from oldest to newest.</param>
+    /// <param name="ClusterName">Cluster name.</param>
+    /// <param name="SslInfo">SSL info.</param>
+    internal record ConnectionContext(
+        ClientProtocolVersion Version,
+        TimeSpan IdleTimeout,
+        ClusterNode ClusterNode,
+        IReadOnlyList<Guid> ClusterIds,
+        string ClusterName,
+        ISslInfo? SslInfo)
+    {
+        /// <summary>
+        /// Gets the current cluster id.
+        /// </summary>
+        public Guid ClusterId => ClusterIds[^1];
+    }
 }

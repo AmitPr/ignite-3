@@ -1,10 +1,10 @@
 /*
  * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
+ * contributor license agreements. See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.
  * The ASF licenses this file to You under the Apache License, Version 2.0
  * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+ * the License. You may obtain a copy of the License at
  *
  *      http://www.apache.org/licenses/LICENSE-2.0
  *
@@ -17,10 +17,12 @@
 
 package org.apache.ignite.internal.configuration.tree;
 
+import java.lang.reflect.Field;
 import java.util.NoSuchElementException;
 import java.util.UUID;
+import org.apache.ignite.configuration.annotation.AbstractConfiguration;
+import org.apache.ignite.configuration.annotation.ConfigurationExtension;
 import org.apache.ignite.configuration.annotation.InjectedName;
-import org.apache.ignite.configuration.annotation.InternalConfiguration;
 import org.apache.ignite.configuration.annotation.InternalId;
 import org.apache.ignite.configuration.annotation.PolymorphicConfig;
 import org.jetbrains.annotations.Nullable;
@@ -39,6 +41,9 @@ public abstract class InnerNode implements TraversableTreeNode, ConstructableTre
     @Nullable
     private UUID internalId;
 
+    /** Immutability flag. */
+    private boolean immutable = false;
+
     /**
      * Returns internal id of the node.
      */
@@ -52,13 +57,15 @@ public abstract class InnerNode implements TraversableTreeNode, ConstructableTre
      * @param internalId New internal id value.
      */
     public final void internalId(UUID internalId) {
+        assertMutability();
+
         this.internalId = internalId;
     }
 
     /** {@inheritDoc} */
     @Override
-    public final <T> T accept(String key, ConfigurationVisitor<T> visitor) {
-        return visitor.visitInnerNode(key, this);
+    public final <T> T accept(Field field, String key, ConfigurationVisitor<T> visitor) {
+        return visitor.visitInnerNode(field, key, this);
     }
 
     /**
@@ -201,10 +208,35 @@ public abstract class InnerNode implements TraversableTreeNode, ConstructableTre
     @Override
     public InnerNode copy() {
         try {
-            return (InnerNode) clone();
+            InnerNode clone = (InnerNode) clone();
+
+            clone.immutable = false;
+
+            return clone;
         } catch (CloneNotSupportedException e) {
             throw new IllegalStateException(e);
         }
+    }
+
+    /**
+     * Checks that current instance is mutable.
+     *
+     * @throws AssertionError If the object is immutable.
+     * @see ConstructableTreeNode#makeImmutable()
+     */
+    public final void assertMutability() {
+        if (immutable) {
+            throw new AssertionError("Mutating immutable configuration");
+        }
+    }
+
+    @Override
+    public boolean makeImmutable() {
+        boolean updated = !immutable;
+
+        immutable = true;
+
+        return updated;
     }
 
     /**
@@ -228,14 +260,13 @@ public abstract class InnerNode implements TraversableTreeNode, ConstructableTre
      * Sets the value of a field with {@link InjectedName}.
      */
     public void setInjectedNameFieldValue(String value) {
-        // No-op.
+        assertMutability();
     }
 
     /**
-     * Returns schemas for {@link InternalConfiguration internal configuration extensions}.
+     * Returns schemas for {@link ConfigurationExtension configuration extensions}.
      */
-    @Nullable
-    public Class<?>[] internalSchemaTypes() {
+    public Class<?> @Nullable [] extensionSchemaTypes() {
         return null;
     }
 
@@ -243,6 +274,13 @@ public abstract class InnerNode implements TraversableTreeNode, ConstructableTre
      * Returns {@code true} if the configuration is {@link PolymorphicConfig polymorphic}.
      */
     public boolean isPolymorphic() {
+        return false;
+    }
+
+    /**
+     * Returns {@code true} if the config schema extends {@link AbstractConfiguration}.
+     */
+    public boolean extendsAbstractConfiguration() {
         return false;
     }
 }

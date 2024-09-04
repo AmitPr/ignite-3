@@ -1,12 +1,12 @@
 /*
  * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
+ * contributor license agreements. See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.
  * The ASF licenses this file to You under the Apache License, Version 2.0
  * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+ * the License. You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *      http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,12 +16,18 @@
  */
 package org.apache.ignite.raft.jraft.util;
 
+import static java.lang.Runtime.getRuntime;
+
+import com.codahale.metrics.MetricRegistry;
 import java.io.Closeable;
 import java.io.File;
 import java.io.IOException;
 import java.lang.management.ManagementFactory;
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.net.InetAddress;
 import java.nio.ByteBuffer;
+import java.nio.MappedByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.StandardOpenOption;
@@ -34,22 +40,20 @@ import java.util.concurrent.Future;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
-import com.codahale.metrics.MetricRegistry;
+import org.apache.ignite.internal.logger.IgniteLogger;
+import org.apache.ignite.internal.logger.Loggers;
 import org.apache.ignite.internal.util.IgniteUtils;
-import org.apache.ignite.lang.IgniteLogger;
 import org.apache.ignite.raft.jraft.Closure;
 import org.apache.ignite.raft.jraft.Status;
 import org.apache.ignite.raft.jraft.error.RaftError;
 import org.apache.ignite.raft.jraft.util.concurrent.MpscSingleThreadExecutor;
 import org.jetbrains.annotations.Nullable;
 
-import static java.lang.Runtime.getRuntime;
-
 /**
  * Helper methods for jraft.
  */
 public final class Utils {
-    private static final IgniteLogger LOG = IgniteLogger.forClass(Utils.class);
+    private static final IgniteLogger LOG = Loggers.forClass(Utils.class);
 
     /**
      * The configured number of available processors. The default is {@link Runtime#availableProcessors()}. This can be
@@ -111,6 +115,17 @@ public final class Utils {
     public static void registerClosureExecutorMetrics(String name, final MetricRegistry reg,
         ThreadPoolExecutor executor) {
         reg.register(name, new ThreadPoolMetricSet(executor));
+    }
+
+    /**
+     * Run closure in current thread.
+     * @param done
+     * @param status
+     */
+    public static void runClosure(Closure done, Status status) {
+        if (done != null) {
+            done.run(status);
+        }
     }
 
     /**
@@ -205,7 +220,7 @@ public final class Utils {
             return 0;
         }
         catch (final IOException e) {
-            LOG.error("Fail to close", e);
+            LOG.error("Fail to close {}.", closeable, e);
             return RaftError.EIO.getNumber();
         }
     }
@@ -306,7 +321,7 @@ public final class Utils {
      * Gets the current monotonic time in milliseconds.
      */
     public static long monotonicMs() {
-        return TimeUnit.NANOSECONDS.toMillis(System.nanoTime());
+        return IgniteUtils.monotonicMs();
     }
 
     /**
@@ -364,6 +379,41 @@ public final class Utils {
         try (final FileChannel fc = FileChannel.open(file.toPath(), isDir ? StandardOpenOption.READ
             : StandardOpenOption.WRITE)) {
             fc.force(true);
+        }
+    }
+
+    /**
+     * Unmap mappedByteBuffer
+     * See https://stackoverflow.com/questions/2972986/how-to-unmap-a-file-from-memory-mapped-using-filechannel-in-java
+     */
+    public static void unmap(final MappedByteBuffer cb) {
+        // JavaSpecVer: 1.6, 1.7, 1.8, 9, 10
+        final boolean isOldJDK = System.getProperty("java.specification.version", "99").startsWith("1.");
+        try {
+            if (isOldJDK) {
+                final Method cleaner = cb.getClass().getMethod("cleaner");
+                cleaner.setAccessible(true);
+                final Method clean = Class.forName("sun.misc.Cleaner").getMethod("clean");
+                clean.setAccessible(true);
+                clean.invoke(cleaner.invoke(cb));
+            } else {
+                Class unsafeClass;
+                try {
+                    unsafeClass = Class.forName("sun.misc.Unsafe");
+                } catch (final Exception ex) {
+                    // jdk.internal.misc.Unsafe doesn't yet have an invokeCleaner() method,
+                    // but that method should be added if sun.misc.Unsafe is removed.
+                    unsafeClass = Class.forName("jdk.internal.misc.Unsafe");
+                }
+                final Method clean = unsafeClass.getMethod("invokeCleaner", ByteBuffer.class);
+                clean.setAccessible(true);
+                final Field theUnsafeField = unsafeClass.getDeclaredField("theUnsafe");
+                theUnsafeField.setAccessible(true);
+                final Object theUnsafe = theUnsafeField.get(null);
+                clean.invoke(theUnsafe, cb);
+            }
+        } catch (final Exception ex) {
+            LOG.error("Fail to un-mapped segment file.", ex);
         }
     }
 
