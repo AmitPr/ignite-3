@@ -20,6 +20,8 @@ package org.apache.ignite.internal.disaster.system;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import org.apache.ignite.internal.cluster.management.ClusterState;
+import org.apache.ignite.internal.disaster.system.exception.ClusterResetException;
+import org.apache.ignite.internal.disaster.system.exception.MigrateException;
 import org.apache.ignite.internal.disaster.system.message.ResetClusterMessage;
 
 /**
@@ -40,19 +42,28 @@ public interface SystemDisasterRecoveryManager {
     void markInitConfigApplied();
 
     /**
-     * Initiates cluster reset.
+     * Initiates cluster reset. Only CMG repair is requested, Metastorage is left intact.
      *
-     * @param proposedCmgConsistentIds Names of the nodes that will be the new CMG nodes.
-     * @return Future completing with the result of the operation ({@link ResetClusterMessage} in case of error related to reset logic).
+     * @param proposedCmgNodeNames Names of the nodes that will be the new CMG nodes.
+     * @return Future completing with the result of the operation ({@link ClusterResetException} in case of error related to reset logic).
      */
-    CompletableFuture<Void> resetCluster(List<String> proposedCmgConsistentIds);
+    CompletableFuture<Void> resetCluster(List<String> proposedCmgNodeNames);
+
+    /**
+     * Initiates cluster reset. CMG will be reset and Metastorage will be repaired.
+     *
+     * @param proposedCmgNodeNames Names of the nodes that will be the new CMG nodes.
+     * @param metastorageReplicationFactor Number of nodes in the Raft voting member set for Metastorage.
+     * @return Future completing with the result of the operation ({@link ClusterResetException} in case of error related to reset logic).
+     */
+    CompletableFuture<Void> resetClusterRepairingMetastorage(List<String> proposedCmgNodeNames, int metastorageReplicationFactor);
 
     /**
      * Migrates nodes missed during CMG repair to the new cluster (which is the result of the repair). To do so, sends the
      * corresponding {@link ResetClusterMessage} to all nodes that are in the physical topology (including itself).
      *
      * @param targetClusterState State of the new cluster.
-     * @return Future completing with the result of the operation.
+     * @return Future completing with the result of the operation ({@link MigrateException} in case of error related to reset logic).
      */
     CompletableFuture<Void> migrate(ClusterState targetClusterState);
 }

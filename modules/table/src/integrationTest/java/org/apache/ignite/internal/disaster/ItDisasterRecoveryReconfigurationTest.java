@@ -51,7 +51,6 @@ import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
-import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -63,9 +62,6 @@ import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import org.apache.ignite.internal.ClusterPerTestIntegrationTest;
 import org.apache.ignite.internal.TestWrappers;
-import org.apache.ignite.internal.affinity.Assignment;
-import org.apache.ignite.internal.affinity.Assignments;
-import org.apache.ignite.internal.affinity.RendezvousAffinityFunction;
 import org.apache.ignite.internal.app.IgniteImpl;
 import org.apache.ignite.internal.catalog.descriptors.CatalogZoneDescriptor;
 import org.apache.ignite.internal.distributionzones.DistributionZoneManager;
@@ -79,6 +75,9 @@ import org.apache.ignite.internal.metastorage.dsl.Statement.UpdateStatement;
 import org.apache.ignite.internal.network.NetworkMessage;
 import org.apache.ignite.internal.partition.replicator.network.disaster.LocalPartitionStateEnum;
 import org.apache.ignite.internal.partition.replicator.network.raft.SnapshotMvDataResponse;
+import org.apache.ignite.internal.partitiondistribution.Assignment;
+import org.apache.ignite.internal.partitiondistribution.Assignments;
+import org.apache.ignite.internal.partitiondistribution.RendezvousDistributionFunction;
 import org.apache.ignite.internal.placementdriver.ReplicaMeta;
 import org.apache.ignite.internal.raft.Peer;
 import org.apache.ignite.internal.raft.RaftNodeId;
@@ -168,7 +167,7 @@ public class ItDisasterRecoveryReconfigurationTest extends ClusterPerTestIntegra
     /**
      * Tests the scenario in which a 5-nodes cluster loses 2 nodes, making one of its partitions unavailable for writes. In this situation
      * write should not work, because "changePeers" cannot happen and group leader will not be elected. Partition 0 in this test is always
-     * assigned to nodes 0, 1 and 4, according to the {@link RendezvousAffinityFunction}.
+     * assigned to nodes 0, 1 and 4, according to the {@link RendezvousDistributionFunction}.
      */
     @Test
     @ZoneParams(nodes = 5, replicas = 3, partitions = 1)
@@ -215,7 +214,7 @@ public class ItDisasterRecoveryReconfigurationTest extends ClusterPerTestIntegra
 
     /**
      * Tests that in a situation from the test {@link #testInsertFailsIfMajorityIsLost()} it is possible to recover partition using a
-     * disaster recovery API. In this test, assignments will be (0, 3, 4), according to {@link RendezvousAffinityFunction}.
+     * disaster recovery API. In this test, assignments will be (0, 3, 4), according to {@link RendezvousDistributionFunction}.
      */
     @Test
     @ZoneParams(nodes = 5, replicas = 3, partitions = 1)
@@ -252,7 +251,7 @@ public class ItDisasterRecoveryReconfigurationTest extends ClusterPerTestIntegra
     /**
      * Tests that in a situation from the test {@link #testInsertFailsIfMajorityIsLost()} it is possible to recover specified partition
      * using a disaster recovery API. In this test, assignments will be (0, 2, 4) and (1, 2, 4), according to
-     * {@link RendezvousAffinityFunction}.
+     * {@link RendezvousDistributionFunction}.
      */
     @Test
     @ZoneParams(nodes = 5, replicas = 3, partitions = 2)
@@ -448,7 +447,7 @@ public class ItDisasterRecoveryReconfigurationTest extends ClusterPerTestIntegra
 
                 if (andThen instanceof UpdateStatement) {
                     UpdateStatement updateStatement = (UpdateStatement) andThen;
-                    Collection<Operation> operations = updateStatement.update().operations();
+                    List<Operation> operations = updateStatement.update().operations();
 
                     ByteArray stablePartAssignmentsKey = stablePartAssignmentsKey(new TablePartitionId(tableId, partId));
 

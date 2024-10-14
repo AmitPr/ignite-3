@@ -23,6 +23,7 @@ import static java.util.stream.Collectors.toList;
 import static java.util.stream.Collectors.toSet;
 import static org.apache.ignite.internal.network.utils.ClusterServiceTestUtils.findLocalAddresses;
 import static org.apache.ignite.internal.network.utils.ClusterServiceTestUtils.waitForTopology;
+import static org.apache.ignite.internal.partitiondistribution.PartitionDistributionUtils.calculateAssignments;
 import static org.apache.ignite.internal.replicator.ReplicatorConstants.DEFAULT_IDLE_SAFE_TIME_PROPAGATION_PERIOD_MILLISECONDS;
 import static org.apache.ignite.internal.testframework.matchers.CompletableFutureMatcher.willCompleteSuccessfully;
 import static org.apache.ignite.internal.util.CollectionUtils.first;
@@ -62,8 +63,6 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.stream.IntStream;
-import org.apache.ignite.internal.affinity.AffinityUtils;
-import org.apache.ignite.internal.affinity.Assignment;
 import org.apache.ignite.internal.catalog.CatalogService;
 import org.apache.ignite.internal.catalog.descriptors.CatalogIndexDescriptor;
 import org.apache.ignite.internal.catalog.descriptors.CatalogTableDescriptor;
@@ -73,7 +72,7 @@ import org.apache.ignite.internal.cluster.management.topology.api.LogicalTopolog
 import org.apache.ignite.internal.cluster.management.topology.api.LogicalTopologyService;
 import org.apache.ignite.internal.cluster.management.topology.api.LogicalTopologySnapshot;
 import org.apache.ignite.internal.configuration.RaftGroupOptionsConfigHelper;
-import org.apache.ignite.internal.failure.NoOpFailureProcessor;
+import org.apache.ignite.internal.failure.NoOpFailureManager;
 import org.apache.ignite.internal.hlc.ClockService;
 import org.apache.ignite.internal.hlc.HybridClock;
 import org.apache.ignite.internal.hlc.HybridClockImpl;
@@ -91,6 +90,7 @@ import org.apache.ignite.internal.network.NodeFinder;
 import org.apache.ignite.internal.network.StaticNodeFinder;
 import org.apache.ignite.internal.network.utils.ClusterServiceTestUtils;
 import org.apache.ignite.internal.partition.replicator.network.PartitionReplicationMessageGroup;
+import org.apache.ignite.internal.partitiondistribution.Assignment;
 import org.apache.ignite.internal.placementdriver.PlacementDriver;
 import org.apache.ignite.internal.placementdriver.ReplicaMeta;
 import org.apache.ignite.internal.placementdriver.TestPlacementDriver;
@@ -136,6 +136,7 @@ import org.apache.ignite.internal.table.distributed.StorageUpdateHandler;
 import org.apache.ignite.internal.table.distributed.TableSchemaAwareIndexStorage;
 import org.apache.ignite.internal.table.distributed.index.IndexMetaStorage;
 import org.apache.ignite.internal.table.distributed.index.IndexUpdateHandler;
+import org.apache.ignite.internal.table.distributed.raft.MinimumRequiredTimeCollectorService;
 import org.apache.ignite.internal.table.distributed.raft.PartitionDataStorage;
 import org.apache.ignite.internal.table.distributed.raft.PartitionListener;
 import org.apache.ignite.internal.table.distributed.replicator.PartitionReplicaListener;
@@ -265,7 +266,7 @@ public class ItTxTestCluster {
 
     private final ClusterNodeResolver nodeResolver = new ClusterNodeResolver() {
         @Override
-        public @Nullable ClusterNode getById(String id) {
+        public @Nullable ClusterNode getById(UUID id) {
             for (ClusterService service : cluster) {
                 ClusterNode clusterNode = service.topologyService().localMember();
 
@@ -408,8 +409,10 @@ public class ItTxTestCluster {
             Path partitionsWorkDir = workDir.resolve("node" + i);
 
             LogStorageFactory partitionsLogStorageFactory = SharedLogStorageFactoryUtils.create(
+                    "test",
                     clusterService.nodeName(),
-                    partitionsWorkDir.resolve("log")
+                    partitionsWorkDir.resolve("log"),
+                    raftConfig.fsync().value()
             );
 
             logStorageFactories.put(nodeName, partitionsLogStorageFactory);
@@ -455,7 +458,7 @@ public class ItTxTestCluster {
                     placementDriver,
                     partitionOperationsExecutor,
                     () -> DEFAULT_IDLE_SAFE_TIME_PROPAGATION_PERIOD_MILLISECONDS,
-                    new NoOpFailureProcessor(),
+                    new NoOpFailureManager(),
                     commandMarshaller,
                     raftClientFactory,
                     raftSrv,
@@ -577,7 +580,7 @@ public class ItTxTestCluster {
      *
      * @param tableName Table name.
      * @param schemaDescriptor Schema descriptor.
-     * @return Groups map.
+     * @return Started instance.
      */
     public TableViewInternal startTable(String tableName, SchemaDescriptor schemaDescriptor) throws Exception {
         int tableId = globalCatalogId.getAndIncrement();
@@ -589,7 +592,7 @@ public class ItTxTestCluster {
         lenient().when(catalogService.table(eq(tableId), anyLong())).thenReturn(tableDescriptor);
         lenient().when(catalogService.table(eq(tableId), anyInt())).thenReturn(tableDescriptor);
 
-        List<Set<Assignment>> calculatedAssignments = AffinityUtils.calculateAssignments(
+        List<Set<Assignment>> calculatedAssignments = calculateAssignments(
                 cluster.stream().map(ItTxTestCluster::extractConsistentId).collect(toList()),
                 1,
                 replicas
@@ -675,7 +678,6 @@ public class ItTxTestCluster {
                 ColumnsExtractor row2Tuple = BinaryRowConverter.keyExtractor(schemaDescriptor);
 
                 StorageHashIndexDescriptor pkIndexDescriptor = mock(StorageHashIndexDescriptor.class);
-                when(pkIndexDescriptor.isPk()).thenReturn(true);
 
                 when(pkIndexDescriptor.columns()).then(invocation -> Collections.nCopies(
                         schemaDescriptor.keyColumns().size(),
@@ -721,7 +723,8 @@ public class ItTxTestCluster {
                         clockServices.get(assignment),
                         mock(IndexMetaStorage.class),
                         // TODO use proper index.
-                        clusterServices.get(assignment).topologyService().getByConsistentId(assignment).id()
+                        clusterServices.get(assignment).topologyService().getByConsistentId(assignment).id(),
+                        mock(MinimumRequiredTimeCollectorService.class)
                 );
 
                 Function<RaftGroupService, ReplicaListener> createReplicaListener = raftClient -> newReplicaListener(
@@ -854,7 +857,7 @@ public class ItTxTestCluster {
         );
     }
 
-    private LogicalTopologyService logicalTopologyService(ClusterService clusterService) {
+    private static LogicalTopologyService logicalTopologyService(ClusterService clusterService) {
         return new LogicalTopologyService() {
             private final UUID clusterId = UUID.randomUUID();
 
@@ -912,7 +915,6 @@ public class ItTxTestCluster {
 
     /**
      * Shutdowns all cluster nodes after each test.
-     *
      */
     public void shutdownCluster() {
         assertThat(stopAsync(new ComponentContext(), cluster), willCompleteSuccessfully());

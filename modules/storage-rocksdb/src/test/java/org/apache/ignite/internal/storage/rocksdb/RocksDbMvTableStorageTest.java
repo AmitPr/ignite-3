@@ -59,7 +59,8 @@ public class RocksDbMvTableStorageTest extends AbstractMvTableStorageTest {
             @WorkDirectory Path workDir,
             @InjectConfiguration("mock.flushDelayMillis = 0")
             RocksDbStorageEngineConfiguration engineConfig,
-            @InjectConfiguration("mock.profiles.default {engine = rocksdb, size = 16777216, writeBufferSize = 16777216}")
+            // Explicit size, small enough for fast allocation, and big enough to fit some data without flushing it to disk constantly.
+            @InjectConfiguration("mock.profiles.default {engine = rocksdb, size = 16777216, writeBufferSize = 67108864}")
             StorageConfiguration storageConfiguration
     ) {
         engine = new RocksDbStorageEngine("test", engineConfig, storageConfiguration, workDir, mock(LogSyncer.class));
@@ -139,7 +140,7 @@ public class RocksDbMvTableStorageTest extends AbstractMvTableStorageTest {
 
         RowId rowId0 = new RowId(PARTITION_ID);
         long leaseStartTime = 1234567;
-        String primaryReplicaNodeId = UUID.randomUUID().toString();
+        UUID primaryReplicaNodeId = UUID.randomUUID();
         String primaryReplicaNodeName = primaryReplicaNodeId + "name";
 
         partitionStorage0.runConsistently(locker -> {

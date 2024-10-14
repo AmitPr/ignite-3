@@ -12,177 +12,91 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import decimal
 import math
+import uuid
+import datetime
 
 import pytest
 
-import pyignite3
-from tests.util import start_cluster_gen, check_cluster_started, server_addresses_basic
+
+test_data = [
+    ("select 'Lorem ipsum'", 'Lorem ipsum'),
+    ("select ''", ''),
+    ("select 42::TINYINT", 42),
+    ("select -18::TINYINT", -18),
+    ("select 4242::SMALLINT", 4242),
+    ("select 987654321", 987654321),
+    ("select 1234567890987654321::BIGINT", 1234567890987654321),
+    ("select 123.456::REAL", 123.456),
+    ("select -123456789.987654321::DOUBLE", -123456789.987654321),
+    ("select TRUE", True),
+    ("select FALSE", False),
+    ("select x'45F0AB'", b'\x45\xf0\xab'),
+    ("select x''", b''),
+    ("select NULL", None),
+    ("SELECT 'c4a0327c-44be-416d-ae90-75c05079789f'::UUID", uuid.UUID('c4a0327c-44be-416d-ae90-75c05079789f')),
+    ("SELECT '00000000-0000-0000-0000-000000000001'::UUID", uuid.UUID('00000000-0000-0000-0000-000000000001')),
+    ("SELECT '10101010-1010-1010-1010-101010101010'::UUID", uuid.UUID('10101010-1010-1010-1010-101010101010')),
+    ("SELECT DATE'1969-07-20'", datetime.date(1969, 7, 20)),
+    ("SELECT DATE'1525-01-01'", datetime.date(1525, 1, 1)),
+    ("SELECT DATE'2024-09-12'", datetime.date(2024, 9, 12)),
+    ("SELECT TIME'20:17:40'", datetime.time(20, 17, 40)),
+    ("SELECT TIME'07:59:13'", datetime.time(7, 59, 13)),
+    ("SELECT TIME'00:00:00'", datetime.time(0, 0, 0)),
+    ("SELECT TIMESTAMP'1969-07-20 20:17:40'", datetime.datetime(1969, 7, 20, 20, 17, 40)),
+    ("SELECT TIMESTAMP'2024-09-12 07:59:13'", datetime.datetime(2024, 9, 12, 7, 59, 13)),
+    ("SELECT TIMESTAMP'1000-01-01 00:00:00'", datetime.datetime(1000, 1, 1, 0, 0, 0)),
+    ("SELECT TIMESTAMP'1000-01-01 00:00:00'", datetime.datetime(1000, 1, 1, 0, 0, 0)),
+    ("SELECT '1111111111111111111111111111111'::DECIMAL", decimal.Decimal('1111111111111111111111111111111')),
+    ("SELECT '11111111111111.11111111111111111'::DECIMAL(31,17)", decimal.Decimal('11111111111111.11111111111111111')),
+    ("SELECT '0.000000000000000000000000000001'::DECIMAL(31,30)", decimal.Decimal('0.000000000000000000000000000001')),
+    ("SELECT '123.456789'::DECIMAL(9,6)", decimal.Decimal('123.456789')),
+    ("SELECT '-123.456789'::DECIMAL(9,6)", decimal.Decimal('-123.456789')),
+    ("SELECT '1'::DECIMAL(20,10)", decimal.Decimal(1)),
+    ("SELECT '0'::DECIMAL(20,10)", decimal.Decimal(0)),
+    ("SELECT INTERVAL '0' DAY", datetime.timedelta(days=0)),
+    ("SELECT INTERVAL '1' DAY", datetime.timedelta(days=1)),
+    ("SELECT INTERVAL '145' DAY", datetime.timedelta(days=145)),
+    ("SELECT INTERVAL '123456789' SECOND", datetime.timedelta(seconds=123456789)),
+    ("SELECT INTERVAL '987654321.123' SECOND", datetime.timedelta(seconds=987654321, milliseconds=123)),
+]
 
 
-@pytest.fixture(autouse=True)
-def cluster():
-    if not check_cluster_started():
-        yield from start_cluster_gen()
+@pytest.mark.parametrize("query,value", test_data)
+def test_fetch_constant(query, value, cursor):
+    cursor.execute(query)
+    data = cursor.fetchone()
+    assert len(data) == 1
+    if isinstance(value, float):
+        assert data[0] == pytest.approx(value)
     else:
-        yield None
+        assert data[0] == value
 
 
-def test_fetch_constant_string():
-    with pyignite3.connect(address=server_addresses_basic[0]) as conn:
-        with conn.cursor() as cursor:
-            cursor.execute("select 'Lorem ipsum'")
-            data = cursor.fetchone()
-            assert len(data) == 1
-            assert data[0] == 'Lorem ipsum'
+def test_fetch_constant_double_nan(cursor):
+    cursor.execute("select CAST('NaN' AS DOUBLE)")
+    data = cursor.fetchone()
+    assert len(data) == 1
+    assert math.isnan(data[0])
 
 
-def test_fetch_constant_string_empty():
-    with pyignite3.connect(address=server_addresses_basic[0]) as conn:
-        with conn.cursor() as cursor:
-            cursor.execute("select ''")
-            data = cursor.fetchone()
-            assert len(data) == 1
-            assert data[0] == ''
+def test_fetch_constant_several_ints(cursor):
+    cursor.execute("select 1,2,3")
+    data = cursor.fetchone()
+    assert len(data) == 3
+    assert data[0] == 1
+    assert data[1] == 2
+    assert data[2] == 3
 
 
-def test_fetch_constant_tinyint():
-    with pyignite3.connect(address=server_addresses_basic[0]) as conn:
-        with conn.cursor() as cursor:
-            cursor.execute("select CAST(42 AS TINYINT)")
-            data = cursor.fetchone()
-            assert len(data) == 1
-            assert data[0] == 42
+def test_fetch_constant_int_bool_string(cursor):
+    cursor.execute("select 42, TRUE, 'Test string'")
+    data = cursor.fetchone()
+    assert len(data) == 3
+    assert data[0] == 42
+    assert data[1] is True
+    assert data[2] == 'Test string'
 
-
-def test_fetch_constant_tinyint_negative():
-    with pyignite3.connect(address=server_addresses_basic[0]) as conn:
-        with conn.cursor() as cursor:
-            cursor.execute("select CAST(-18 AS TINYINT)")
-            data = cursor.fetchone()
-            assert len(data) == 1
-            assert data[0] == -18
-
-
-def test_fetch_constant_smallint():
-    with pyignite3.connect(address=server_addresses_basic[0]) as conn:
-        with conn.cursor() as cursor:
-            cursor.execute("select CAST(4242 AS SMALLINT)")
-            data = cursor.fetchone()
-            assert len(data) == 1
-            assert data[0] == 4242
-
-
-def test_fetch_constant_int():
-    with pyignite3.connect(address=server_addresses_basic[0]) as conn:
-        with conn.cursor() as cursor:
-            cursor.execute("select 987654321")
-            data = cursor.fetchone()
-            assert len(data) == 1
-            assert data[0] == 987654321
-
-
-def test_fetch_constant_bigint():
-    with pyignite3.connect(address=server_addresses_basic[0]) as conn:
-        with conn.cursor() as cursor:
-            cursor.execute("select CAST(1234567890987654321 AS BIGINT)")
-            data = cursor.fetchone()
-            assert len(data) == 1
-            assert data[0] == 1234567890987654321
-
-
-def test_fetch_constant_real():
-    with pyignite3.connect(address=server_addresses_basic[0]) as conn:
-        with conn.cursor() as cursor:
-            cursor.execute("select CAST(123.456 AS REAL)")
-            data = cursor.fetchone()
-            assert len(data) == 1
-            assert data[0] == pytest.approx(123.456)
-
-
-def test_fetch_constant_double():
-    with pyignite3.connect(address=server_addresses_basic[0]) as conn:
-        with conn.cursor() as cursor:
-            cursor.execute("select CAST(-123456789.987654321 AS DOUBLE)")
-            data = cursor.fetchone()
-            assert len(data) == 1
-            assert data[0] == pytest.approx(-123456789.987654321)
-
-
-def test_fetch_constant_double_nan():
-    with pyignite3.connect(address=server_addresses_basic[0]) as conn:
-        with conn.cursor() as cursor:
-            cursor.execute("select CAST('NaN' AS DOUBLE)")
-            data = cursor.fetchone()
-            assert len(data) == 1
-            assert math.isnan(data[0])
-
-
-def test_fetch_constant_bool_true():
-    with pyignite3.connect(address=server_addresses_basic[0]) as conn:
-        with conn.cursor() as cursor:
-            cursor.execute("select TRUE")
-            data = cursor.fetchone()
-            assert len(data) == 1
-            assert data[0] is True
-
-
-def test_fetch_constant_bool_false():
-    with pyignite3.connect(address=server_addresses_basic[0]) as conn:
-        with conn.cursor() as cursor:
-            cursor.execute("select FALSE")
-            data = cursor.fetchone()
-            assert len(data) == 1
-            assert data[0] is False
-
-
-def test_fetch_constant_binary():
-    with pyignite3.connect(address=server_addresses_basic[0]) as conn:
-        with conn.cursor() as cursor:
-            cursor.execute("select x'45F0AB'")
-            data = cursor.fetchone()
-            assert len(data) == 1
-            assert data[0] == b'\x45\xf0\xab'
-
-
-def test_fetch_constant_binary_empty():
-    with pyignite3.connect(address=server_addresses_basic[0]) as conn:
-        with conn.cursor() as cursor:
-            cursor.execute("select x''")
-            data = cursor.fetchone()
-            assert len(data) == 1
-            assert data[0] == b''
-
-
-def test_fetch_constant_null():
-    with pyignite3.connect(address=server_addresses_basic[0]) as conn:
-        with conn.cursor() as cursor:
-            cursor.execute("select NULL")
-            data = cursor.fetchone()
-            assert len(data) == 1
-            assert data[0] is None
-
-
-def test_fetch_constant_several_ints():
-    with pyignite3.connect(address=server_addresses_basic[0]) as conn:
-        with conn.cursor() as cursor:
-            cursor.execute("select 1,2,3")
-            data = cursor.fetchone()
-            assert len(data) == 3
-            assert data[0] == 1
-            assert data[1] == 2
-            assert data[2] == 3
-
-
-def test_fetch_constant_int_bool_string():
-    with pyignite3.connect(address=server_addresses_basic[0]) as conn:
-        with conn.cursor() as cursor:
-            cursor.execute("select 42, TRUE, 'Test string'")
-            data = cursor.fetchone()
-            assert len(data) == 3
-            assert data[0] == 42
-            assert data[1] is True
-            assert data[2] == 'Test string'
-
-            nothing = cursor.fetchone()
-            assert nothing is None
+    nothing = cursor.fetchone()
+    assert nothing is None

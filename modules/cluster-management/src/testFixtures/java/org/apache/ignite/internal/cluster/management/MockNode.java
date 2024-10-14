@@ -30,7 +30,6 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
-import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import org.apache.ignite.internal.cluster.management.configuration.NodeAttributesConfiguration;
 import org.apache.ignite.internal.cluster.management.raft.RocksDbClusterStateStorage;
@@ -40,13 +39,12 @@ import org.apache.ignite.internal.cluster.management.topology.api.LogicalTopolog
 import org.apache.ignite.internal.configuration.RaftGroupOptionsConfigHelper;
 import org.apache.ignite.internal.configuration.validation.TestConfigurationValidator;
 import org.apache.ignite.internal.disaster.system.SystemDisasterRecoveryStorage;
-import org.apache.ignite.internal.failure.FailureProcessor;
-import org.apache.ignite.internal.failure.NoOpFailureProcessor;
+import org.apache.ignite.internal.failure.FailureManager;
+import org.apache.ignite.internal.failure.NoOpFailureManager;
 import org.apache.ignite.internal.hlc.HybridClockImpl;
 import org.apache.ignite.internal.manager.ComponentContext;
 import org.apache.ignite.internal.manager.IgniteComponent;
 import org.apache.ignite.internal.network.ClusterService;
-import org.apache.ignite.internal.network.ConstantClusterIdSupplier;
 import org.apache.ignite.internal.network.NodeFinder;
 import org.apache.ignite.internal.network.utils.ClusterServiceTestUtils;
 import org.apache.ignite.internal.raft.RaftGroupOptionsConfigurer;
@@ -116,7 +114,7 @@ public class MockNode {
         var clusterStateStorage =
                 new RocksDbClusterStateStorage(this.workDir.resolve("cmg/data"), clusterService.nodeName());
 
-        FailureProcessor failureProcessor = new NoOpFailureProcessor();
+        FailureManager failureManager = new NoOpFailureManager();
 
         LogStorageFactory cmgLogStorageFactory =
                 SharedLogStorageFactoryUtils.create(
@@ -134,9 +132,9 @@ public class MockNode {
                 new ClusterInitializer(clusterService, hocon -> hocon, new TestConfigurationValidator()),
                 raftManager,
                 clusterStateStorage,
-                new LogicalTopologyImpl(clusterStateStorage, new ConstantClusterIdSupplier(UUID.randomUUID())),
+                new LogicalTopologyImpl(clusterStateStorage),
                 new NodeAttributesCollector(nodeAttributes, storageProfilesConfiguration),
-                failureProcessor,
+                failureManager,
                 clusterIdHolder,
                 cmgRaftConfigurer
         );
@@ -148,7 +146,7 @@ public class MockNode {
                 cmgLogStorageFactory,
                 raftManager,
                 clusterStateStorage,
-                failureProcessor,
+                failureManager,
                 clusterManager
         );
     }

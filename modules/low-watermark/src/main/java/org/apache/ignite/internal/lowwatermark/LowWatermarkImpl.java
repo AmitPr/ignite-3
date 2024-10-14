@@ -20,13 +20,14 @@ package org.apache.ignite.internal.lowwatermark;
 import static org.apache.ignite.internal.failure.FailureType.CRITICAL_ERROR;
 import static org.apache.ignite.internal.hlc.HybridTimestamp.MIN_VALUE;
 import static org.apache.ignite.internal.hlc.HybridTimestamp.hybridTimestampToLong;
-import static org.apache.ignite.internal.lowwatermark.event.LowWatermarkEvent.LOW_WATERMARK_BEFORE_CHANGE;
 import static org.apache.ignite.internal.lowwatermark.event.LowWatermarkEvent.LOW_WATERMARK_CHANGED;
 import static org.apache.ignite.internal.util.CompletableFutures.nullCompletedFuture;
 import static org.apache.ignite.internal.util.IgniteUtils.inBusyLock;
 import static org.apache.ignite.internal.util.IgniteUtils.inBusyLockAsync;
 
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
@@ -38,7 +39,7 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.Consumer;
 import org.apache.ignite.internal.event.AbstractEventProducer;
 import org.apache.ignite.internal.failure.FailureContext;
-import org.apache.ignite.internal.failure.FailureProcessor;
+import org.apache.ignite.internal.failure.FailureManager;
 import org.apache.ignite.internal.hlc.ClockService;
 import org.apache.ignite.internal.hlc.HybridTimestamp;
 import org.apache.ignite.internal.lang.ByteArray;
@@ -110,7 +111,7 @@ public class LowWatermarkImpl extends AbstractEventProducer<LowWatermarkEvent, L
 
     private final AtomicReference<ScheduledFuture<?>> lastScheduledTaskFuture = new AtomicReference<>();
 
-    private final FailureProcessor failureProcessor;
+    private final FailureManager failureManager;
 
     private final ReadWriteLock updateLowWatermarkLock = new ReentrantReadWriteLock();
 
@@ -120,6 +121,8 @@ public class LowWatermarkImpl extends AbstractEventProducer<LowWatermarkEvent, L
             new LowWatermarkCandidate(MIN_VALUE, nullCompletedFuture())
     );
 
+    private final Map<Object, LowWatermarkLock> locks = new ConcurrentHashMap<>();
+
     /**
      * Constructor.
      *
@@ -127,20 +130,20 @@ public class LowWatermarkImpl extends AbstractEventProducer<LowWatermarkEvent, L
      * @param lowWatermarkConfig Low watermark configuration.
      * @param clockService A hybrid logical clock.
      * @param vaultManager Vault manager.
-     * @param failureProcessor Failure processor that is used to handle critical errors.
+     * @param failureManager Failure processor that is used to handle critical errors.
      */
     public LowWatermarkImpl(
             String nodeName,
             LowWatermarkConfiguration lowWatermarkConfig,
             ClockService clockService,
             VaultManager vaultManager,
-            FailureProcessor failureProcessor,
+            FailureManager failureManager,
             MessagingService messagingService
     ) {
         this.lowWatermarkConfig = lowWatermarkConfig;
         this.clockService = clockService;
         this.vaultManager = vaultManager;
-        this.failureProcessor = failureProcessor;
+        this.failureManager = failureManager;
         this.messagingService = messagingService;
 
         scheduledThreadPool = Executors.newSingleThreadScheduledExecutor(
@@ -233,8 +236,10 @@ public class LowWatermarkImpl extends AbstractEventProducer<LowWatermarkEvent, L
         updateLowWatermarkLock.writeLock().lock();
 
         try {
-            assert lowWatermark == null || newLowWatermark.compareTo(lowWatermark) > 0 :
-                    "Low watermark should only grow: [cur=" + lowWatermark + ", new=" + newLowWatermark + "]";
+            HybridTimestamp lwm = lowWatermark;
+
+            assert lwm == null || newLowWatermark.compareTo(lwm) > 0 :
+                    "Low watermark should only grow: [cur=" + lwm + ", new=" + newLowWatermark + "]";
 
             lowWatermark = newLowWatermark;
         } finally {
@@ -296,31 +301,83 @@ public class LowWatermarkImpl extends AbstractEventProducer<LowWatermarkEvent, L
         });
     }
 
+    @Override
+    public boolean tryLock(Object lockId, HybridTimestamp ts) {
+        return inBusyLock(busyLock, () -> {
+            updateLowWatermarkLock.readLock().lock();
+
+            try {
+                HybridTimestamp lwm = lowWatermark;
+                if (lwm != null && ts.compareTo(lwm) < 0) {
+                    return false;
+                }
+
+                locks.put(lockId, new LowWatermarkLock(ts));
+
+                return true;
+            } finally {
+                updateLowWatermarkLock.readLock().unlock();
+            }
+        });
+    }
+
+    @Override
+    public void unlock(Object lockId) {
+        LowWatermarkLock lock = locks.remove(lockId);
+
+        if (lock == null) {
+            // Already released.
+            return;
+        }
+
+        lock.future().complete(null);
+    }
+
     CompletableFuture<Void> updateAndNotify(HybridTimestamp newLowWatermark) {
-        return inBusyLockAsync(busyLock, () ->
-                fireEvent(LOW_WATERMARK_BEFORE_CHANGE, new ChangeLowWatermarkEventParameters(newLowWatermark))
-                        .thenComposeAsync(unused -> {
-                            vaultManager.put(LOW_WATERMARK_VAULT_KEY, ByteUtils.toBytes(newLowWatermark));
+        return inBusyLockAsync(busyLock, () -> {
+                    vaultManager.put(LOW_WATERMARK_VAULT_KEY, ByteUtils.toBytes(newLowWatermark));
 
-                            setLowWatermark(newLowWatermark);
+                    return waitForLocksAndSetLowWatermark(newLowWatermark)
+                            .thenComposeAsync(unused2 -> fireEvent(
+                                    LOW_WATERMARK_CHANGED,
+                                    new ChangeLowWatermarkEventParameters(newLowWatermark)), scheduledThreadPool)
+                            .whenCompleteAsync((unused, throwable) -> {
+                                if (throwable != null) {
+                                    if (!(throwable instanceof NodeStoppingException)) {
+                                        LOG.error("Failed to update low watermark, will schedule again: {}", throwable, newLowWatermark);
 
-                            return fireEvent(LOW_WATERMARK_CHANGED, new ChangeLowWatermarkEventParameters(newLowWatermark));
-                        }, scheduledThreadPool)
-                        .whenCompleteAsync((unused, throwable) -> {
-                            if (throwable != null) {
-                                if (!(throwable instanceof NodeStoppingException)) {
-                                    LOG.error("Failed to update low watermark, will schedule again: {}", throwable, newLowWatermark);
+                                        failureManager.process(new FailureContext(CRITICAL_ERROR, throwable));
 
-                                    failureProcessor.process(new FailureContext(CRITICAL_ERROR, throwable));
+                                        inBusyLock(busyLock, this::scheduleUpdateLowWatermarkBusy);
+                                    }
+                                } else {
+                                    LOG.info("Successful low watermark update: {}", newLowWatermark);
 
                                     inBusyLock(busyLock, this::scheduleUpdateLowWatermarkBusy);
                                 }
-                            } else {
-                                LOG.info("Successful low watermark update: {}", newLowWatermark);
-
-                                inBusyLock(busyLock, this::scheduleUpdateLowWatermarkBusy);
-                            }
-                        }, scheduledThreadPool)
+                            }, scheduledThreadPool);
+                }
         );
+    }
+
+    private CompletableFuture<Void> waitForLocksAndSetLowWatermark(HybridTimestamp newLowWatermark) {
+        return inBusyLockAsync(busyLock, () -> {
+            // Write lock so no new LWM locks can be added.
+            updateLowWatermarkLock.writeLock().lock();
+
+            try {
+                for (LowWatermarkLock lock : locks.values()) {
+                    if (lock.timestamp().compareTo(newLowWatermark) < 0) {
+                        return lock.future().thenCompose(unused -> waitForLocksAndSetLowWatermark(newLowWatermark));
+                    }
+                }
+
+                setLowWatermark(newLowWatermark);
+
+                return nullCompletedFuture();
+            } finally {
+                updateLowWatermarkLock.writeLock().unlock();
+            }
+        });
     }
 }

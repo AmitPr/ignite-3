@@ -17,12 +17,22 @@
 
 package org.apache.ignite.internal.sql.engine.type;
 
+import static org.apache.ignite.internal.sql.engine.type.IgniteTypeSystem.MIN_SCALE_OF_AVG_RESULT;
+import static org.apache.ignite.internal.sql.engine.util.TypeUtils.native2relationalType;
+import static org.hamcrest.MatcherAssert.assertThat;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
+import java.util.stream.Stream;
 import org.apache.calcite.rel.type.RelDataType;
 import org.apache.calcite.sql.type.SqlTypeName;
+import org.apache.ignite.internal.sql.engine.util.Commons;
 import org.apache.ignite.internal.testframework.BaseIgniteAbstractTest;
+import org.apache.ignite.internal.type.NativeTypes;
+import org.hamcrest.Matchers;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 
 /** Tests for {@link IgniteTypeSystem}. */
 public class IgniteTypeSystemTest extends BaseIgniteAbstractTest {
@@ -88,5 +98,176 @@ public class IgniteTypeSystemTest extends BaseIgniteAbstractTest {
     @Test
     public void testGetMaxNumericScale() {
         assertEquals(DECIMAL_SCALE, typeSystem.getMaxNumericScale());
+    }
+
+    @ParameterizedTest
+    @MethodSource("deriveAvgTypeArguments")
+    void deriveAvgType(RelDataType argument, RelDataType expected) {
+        RelDataType actual = typeSystem.deriveAvgAggType(Commons.typeFactory(), argument);
+
+        assertThat(actual, Matchers.equalTo(expected));
+    }
+
+    private static Stream<Arguments> deriveAvgTypeArguments() {
+        IgniteTypeSystem typeSystem = IgniteTypeSystem.INSTANCE;
+        IgniteTypeFactory typeFactory = Commons.typeFactory();
+
+        return Stream.of(
+                Arguments.of(
+                        native2relationalType(typeFactory, NativeTypes.INT8),
+                        native2relationalType(typeFactory, NativeTypes.decimalOf(
+                                typeSystem.getMaxPrecision(SqlTypeName.TINYINT) + MIN_SCALE_OF_AVG_RESULT, MIN_SCALE_OF_AVG_RESULT
+                        ))
+                ),
+                Arguments.of(
+                        native2relationalType(typeFactory, NativeTypes.INT16),
+                        native2relationalType(typeFactory, NativeTypes.decimalOf(
+                                typeSystem.getMaxPrecision(SqlTypeName.SMALLINT) + MIN_SCALE_OF_AVG_RESULT, MIN_SCALE_OF_AVG_RESULT
+                        ))
+                ),
+                Arguments.of(
+                        native2relationalType(typeFactory, NativeTypes.INT32),
+                        native2relationalType(typeFactory, NativeTypes.decimalOf(
+                                typeSystem.getMaxPrecision(SqlTypeName.INTEGER) + MIN_SCALE_OF_AVG_RESULT, MIN_SCALE_OF_AVG_RESULT
+                        ))
+                ),
+                Arguments.of(
+                        native2relationalType(typeFactory, NativeTypes.INT64),
+                        native2relationalType(typeFactory, NativeTypes.decimalOf(
+                                typeSystem.getMaxPrecision(SqlTypeName.BIGINT) + MIN_SCALE_OF_AVG_RESULT, MIN_SCALE_OF_AVG_RESULT
+                        ))
+                ),
+                Arguments.of(
+                        native2relationalType(typeFactory, NativeTypes.decimalOf(4, 0)),
+                        native2relationalType(typeFactory, NativeTypes.decimalOf(
+                                4 + MIN_SCALE_OF_AVG_RESULT, MIN_SCALE_OF_AVG_RESULT
+                        ))
+                ),
+                Arguments.of(
+                        native2relationalType(typeFactory, NativeTypes.decimalOf(4, 2)),
+                        native2relationalType(typeFactory, NativeTypes.decimalOf(
+                                2 + MIN_SCALE_OF_AVG_RESULT, MIN_SCALE_OF_AVG_RESULT
+                        ))
+                ),
+                Arguments.of(
+                        native2relationalType(typeFactory, NativeTypes.decimalOf(4, 4)),
+                        native2relationalType(typeFactory, NativeTypes.decimalOf(
+                                MIN_SCALE_OF_AVG_RESULT, MIN_SCALE_OF_AVG_RESULT
+                        ))
+                ),
+                Arguments.of(
+                        native2relationalType(typeFactory, NativeTypes.decimalOf(20, 18)),
+                        native2relationalType(typeFactory, NativeTypes.decimalOf(20, 18))
+                ),
+                Arguments.of(
+                        native2relationalType(typeFactory, NativeTypes.FLOAT),
+                        native2relationalType(typeFactory, NativeTypes.DOUBLE)
+                ),
+                Arguments.of(
+                        native2relationalType(typeFactory, NativeTypes.DOUBLE),
+                        native2relationalType(typeFactory, NativeTypes.DOUBLE)
+                )
+        );
+    }
+
+
+    @ParameterizedTest
+    @MethodSource("deriveDivideDecimalArgs")
+    void deriveDivide(RelDataType a1, RelDataType a2, RelDataType rt) {
+        RelDataType actual = typeSystem.deriveDecimalDivideType(Commons.typeFactory(), a1, a2);
+
+        assertThat(actual, Matchers.equalTo(rt));
+    }
+
+    private static Stream<Arguments> deriveDivideDecimalArgs() {
+        IgniteTypeFactory typeFactory = Commons.typeFactory();
+
+        return Stream.of(
+                Arguments.of(
+                        native2relationalType(typeFactory, NativeTypes.decimalOf(2, 0)),
+                        native2relationalType(typeFactory, NativeTypes.decimalOf(2, 0)),
+                        native2relationalType(typeFactory, NativeTypes.decimalOf(8, 6))
+                ),
+                Arguments.of(
+                        native2relationalType(typeFactory, NativeTypes.decimalOf(5, 0)),
+                        native2relationalType(typeFactory, NativeTypes.decimalOf(5, 0)),
+                        native2relationalType(typeFactory, NativeTypes.decimalOf(11, 6))
+                ),
+                Arguments.of(
+                        native2relationalType(typeFactory, NativeTypes.decimalOf(5, 1)),
+                        native2relationalType(typeFactory, NativeTypes.decimalOf(5, 0)),
+                        native2relationalType(typeFactory, NativeTypes.decimalOf(11, 7))
+                ),
+                Arguments.of(
+                        native2relationalType(typeFactory, NativeTypes.decimalOf(5, 1)),
+                        native2relationalType(typeFactory, NativeTypes.decimalOf(5, 1)),
+                        native2relationalType(typeFactory, NativeTypes.decimalOf(12, 7))
+                ),
+                Arguments.of(
+                        native2relationalType(typeFactory, NativeTypes.decimalOf(5, 2)),
+                        native2relationalType(typeFactory, NativeTypes.decimalOf(5, 2)),
+                        native2relationalType(typeFactory, NativeTypes.decimalOf(13, 8))
+                ),
+                Arguments.of(
+                        native2relationalType(typeFactory, NativeTypes.decimalOf(5, 3)),
+                        native2relationalType(typeFactory, NativeTypes.decimalOf(5, 3)),
+                        native2relationalType(typeFactory, NativeTypes.decimalOf(14, 9))
+                ),
+                Arguments.of(
+                        native2relationalType(typeFactory, NativeTypes.decimalOf(10, 5)),
+                        native2relationalType(typeFactory, NativeTypes.decimalOf(10, 5)),
+                        native2relationalType(typeFactory, NativeTypes.decimalOf(26, 16))
+                ),
+                Arguments.of(
+                        native2relationalType(typeFactory, NativeTypes.decimalOf(10, 9)),
+                        native2relationalType(typeFactory, NativeTypes.decimalOf(10, 9)),
+                        native2relationalType(typeFactory, NativeTypes.decimalOf(30, 20))
+                ),
+                Arguments.of(
+                        native2relationalType(typeFactory, NativeTypes.decimalOf(32000, 9)),
+                        native2relationalType(typeFactory, NativeTypes.decimalOf(32000, 0)),
+                        native2relationalType(typeFactory, NativeTypes.decimalOf(32767, 776))
+                ),
+                Arguments.of(
+                        native2relationalType(typeFactory, NativeTypes.decimalOf(32000, 0)),
+                        native2relationalType(typeFactory, NativeTypes.decimalOf(32000, 9)),
+                        native2relationalType(typeFactory, NativeTypes.decimalOf(32767, 758))
+                ),
+                Arguments.of(
+                        native2relationalType(typeFactory, NativeTypes.decimalOf(32000, 9)),
+                        native2relationalType(typeFactory, NativeTypes.decimalOf(32000, 9)),
+                        native2relationalType(typeFactory, NativeTypes.decimalOf(32767, 767))
+                ),
+                Arguments.of(
+                        native2relationalType(typeFactory, NativeTypes.decimalOf(32767, 9)),
+                        native2relationalType(typeFactory, NativeTypes.decimalOf(32767, 0)),
+                        native2relationalType(typeFactory, NativeTypes.decimalOf(32767, 9))
+                ),
+                Arguments.of(
+                        native2relationalType(typeFactory, NativeTypes.decimalOf(32767, 0)),
+                        native2relationalType(typeFactory, NativeTypes.decimalOf(32767, 150)),
+                        native2relationalType(typeFactory, NativeTypes.decimalOf(32767, 0))
+                ),
+                Arguments.of(
+                        native2relationalType(typeFactory, NativeTypes.decimalOf(32767, 32767)),
+                        native2relationalType(typeFactory, NativeTypes.decimalOf(32767, 0)),
+                        native2relationalType(typeFactory, NativeTypes.decimalOf(32767, 32767))
+                ),
+                Arguments.of(
+                        native2relationalType(typeFactory, NativeTypes.decimalOf(32767, 32767)),
+                        native2relationalType(typeFactory, NativeTypes.decimalOf(32767, 32765)),
+                        native2relationalType(typeFactory, NativeTypes.decimalOf(32767, 2))
+                ),
+                Arguments.of(
+                        native2relationalType(typeFactory, NativeTypes.decimalOf(32767, 32767)),
+                        native2relationalType(typeFactory, NativeTypes.decimalOf(32767, 32667)),
+                        native2relationalType(typeFactory, NativeTypes.decimalOf(32767, 100))
+                ),
+                Arguments.of(
+                        native2relationalType(typeFactory, NativeTypes.decimalOf(32767, 32767)),
+                        native2relationalType(typeFactory, NativeTypes.decimalOf(32767, 32767)),
+                        native2relationalType(typeFactory, NativeTypes.decimalOf(32767, 0))
+                )
+        );
     }
 }

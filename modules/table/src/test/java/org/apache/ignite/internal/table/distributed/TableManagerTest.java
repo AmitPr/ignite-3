@@ -46,6 +46,7 @@ import static org.junit.jupiter.api.Assertions.fail;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.atMost;
 import static org.mockito.Mockito.doReturn;
@@ -74,8 +75,6 @@ import java.util.concurrent.TimeoutException;
 import java.util.function.Consumer;
 import java.util.function.LongFunction;
 import java.util.function.Supplier;
-import org.apache.ignite.internal.affinity.Assignment;
-import org.apache.ignite.internal.affinity.Assignments;
 import org.apache.ignite.internal.catalog.CatalogManager;
 import org.apache.ignite.internal.catalog.CatalogTestUtils;
 import org.apache.ignite.internal.catalog.commands.ColumnParams;
@@ -88,7 +87,7 @@ import org.apache.ignite.internal.configuration.testframework.ConfigurationExten
 import org.apache.ignite.internal.configuration.testframework.InjectConfiguration;
 import org.apache.ignite.internal.distributionzones.DistributionZoneManager;
 import org.apache.ignite.internal.distributionzones.DistributionZonesTestUtil;
-import org.apache.ignite.internal.failure.FailureProcessor;
+import org.apache.ignite.internal.failure.FailureManager;
 import org.apache.ignite.internal.hlc.HybridClock;
 import org.apache.ignite.internal.hlc.HybridClockImpl;
 import org.apache.ignite.internal.hlc.TestClockService;
@@ -105,6 +104,8 @@ import org.apache.ignite.internal.network.ClusterService;
 import org.apache.ignite.internal.network.MessagingService;
 import org.apache.ignite.internal.network.TopologyService;
 import org.apache.ignite.internal.partition.replicator.PartitionReplicaLifecycleManager;
+import org.apache.ignite.internal.partitiondistribution.Assignment;
+import org.apache.ignite.internal.partitiondistribution.Assignments;
 import org.apache.ignite.internal.placementdriver.TestPlacementDriver;
 import org.apache.ignite.internal.raft.Loza;
 import org.apache.ignite.internal.raft.client.TopologyAwareRaftGroupService;
@@ -127,6 +128,7 @@ import org.apache.ignite.internal.table.StreamerReceiverRunner;
 import org.apache.ignite.internal.table.TableTestUtils;
 import org.apache.ignite.internal.table.TableViewInternal;
 import org.apache.ignite.internal.table.distributed.index.IndexMetaStorage;
+import org.apache.ignite.internal.table.distributed.raft.MinimumRequiredTimeCollectorServiceImpl;
 import org.apache.ignite.internal.table.distributed.raft.snapshot.outgoing.OutgoingSnapshotsManager;
 import org.apache.ignite.internal.table.distributed.schema.AlwaysSyncedSchemaSyncService;
 import org.apache.ignite.internal.testframework.IgniteAbstractTest;
@@ -242,7 +244,7 @@ public class TableManagerTest extends IgniteAbstractTest {
 
     /** Test node. */
     private final ClusterNode node = new ClusterNodeImpl(
-            UUID.randomUUID().toString(),
+            UUID.randomUUID(),
             NODE_NAME,
             new NetworkAddress("127.0.0.1", 2245)
     );
@@ -390,7 +392,7 @@ public class TableManagerTest extends IgniteAbstractTest {
         int tableId = table.tableId();
         TableManager tableManager = tblManagerFut.join();
         long assignmentsTimestamp = catalogManager.catalog(catalogManager.latestCatalogVersion()).time();
-        List<Assignments> assignmentsList = List.of(Assignments.of(assignmentsTimestamp, Assignment.forPeer(node.id())));
+        List<Assignments> assignmentsList = List.of(Assignments.of(assignmentsTimestamp, Assignment.forPeer(node.name())));
 
         // the first case scenario
         CompletableFuture<List<Assignments>> assignmentsFuture = new CompletableFuture<>();
@@ -406,7 +408,7 @@ public class TableManagerTest extends IgniteAbstractTest {
         CompletableFuture<Boolean> invokeTimeoutFuture = new CompletableFuture<>();
         var innerExceptionMsg = "Inner future is interrupted";
         invokeTimeoutFuture.completeExceptionally(new TimeoutException(innerExceptionMsg));
-        when(msm.invoke(any(), any(List.class), any(List.class))).thenReturn(invokeTimeoutFuture);
+        when(msm.invoke(any(), anyList(), anyList())).thenReturn(invokeTimeoutFuture);
         writtenAssignmentsFuture = tableManager.writeTableAssignmentsToMetastore(tableId, assignmentsFuture);
         assertTrue(writtenAssignmentsFuture.isCompletedExceptionally());
         assertThrowsWithCause(writtenAssignmentsFuture::get, TimeoutException.class, innerExceptionMsg);
@@ -716,7 +718,7 @@ public class TableManagerTest extends IgniteAbstractTest {
         });
 
         when(msm.invoke(any(), any(Operation.class), any(Operation.class))).thenReturn(trueCompletedFuture());
-        when(msm.invoke(any(), any(List.class), any(List.class))).thenReturn(trueCompletedFuture());
+        when(msm.invoke(any(), anyList(), anyList())).thenReturn(trueCompletedFuture());
         when(msm.get(any())).thenReturn(nullCompletedFuture());
 
         when(msm.recoveryFinishedFuture()).thenReturn(completedFuture(2L));
@@ -731,17 +733,16 @@ public class TableManagerTest extends IgniteAbstractTest {
      * @param tblManagerFut Future for table manager.
      * @param phaser Phaser for the wait.
      * @return Table manager.
-     * @throws Exception If something went wrong.
      */
     private TableViewInternal mockManagersAndCreateTableWithDelay(
             String tableName,
             CompletableFuture<TableManager> tblManagerFut,
             @Nullable Phaser phaser
-    ) throws Exception {
+    ) {
         String consistentId = "node0";
 
         when(ts.getByConsistentId(any())).thenReturn(new ClusterNodeImpl(
-                UUID.randomUUID().toString(),
+                UUID.randomUUID(),
                 consistentId,
                 new NetworkAddress("localhost", 47500)
         ));
@@ -838,7 +839,8 @@ public class TableManagerTest extends IgniteAbstractTest {
                 mock(TransactionInflights.class),
                 indexMetaStorage,
                 logSyncer,
-                partitionReplicaLifecycleManager
+                partitionReplicaLifecycleManager,
+                new MinimumRequiredTimeCollectorServiceImpl()
         ) {
 
             @Override
@@ -890,7 +892,7 @@ public class TableManagerTest extends IgniteAbstractTest {
                         mockedRegistry,
                         storagePath,
                         null,
-                        mock(FailureProcessor.class),
+                        mock(FailureManager.class),
                         mock(LogSyncer.class),
                         clock
                 ),

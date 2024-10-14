@@ -40,6 +40,8 @@ public class RestartProofIgnite implements Ignite, Wrapper {
     private final IgniteTables tables;
     private final IgniteTransactions transactions;
     private final IgniteSql sql;
+    private final IgniteCompute compute;
+    private final IgniteCatalog catalog;
 
     /**
      * Constructor.
@@ -50,6 +52,8 @@ public class RestartProofIgnite implements Ignite, Wrapper {
         tables = new RestartProofIgniteTables(attachmentLock);
         transactions = new RestartProofIgniteTransactions(attachmentLock);
         sql = new RestartProofIgniteSql(attachmentLock);
+        compute = new RestartProofIgniteCompute(attachmentLock);
+        catalog = new RestartProofIgniteCatalog(attachmentLock);
     }
 
     @Override
@@ -74,8 +78,7 @@ public class RestartProofIgnite implements Ignite, Wrapper {
 
     @Override
     public IgniteCompute compute() {
-        // TODO: IGNITE-23014 - add a wrapper.
-        return attachmentLock.attached(Ignite::compute);
+        return compute;
     }
 
     @Override
@@ -90,8 +93,7 @@ public class RestartProofIgnite implements Ignite, Wrapper {
 
     @Override
     public IgniteCatalog catalog() {
-        // TODO: IGNITE-23015 - add a wrapper.
-        return attachmentLock.attached(Ignite::catalog);
+        return catalog;
     }
 
     @Override

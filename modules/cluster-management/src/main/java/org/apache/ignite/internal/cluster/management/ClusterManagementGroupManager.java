@@ -17,6 +17,7 @@
 
 package org.apache.ignite.internal.cluster.management;
 
+import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.CompletableFuture.completedFuture;
 import static java.util.concurrent.CompletableFuture.failedFuture;
 import static java.util.stream.Collectors.toList;
@@ -68,7 +69,7 @@ import org.apache.ignite.internal.disaster.system.storage.ClusterResetStorage;
 import org.apache.ignite.internal.event.AbstractEventProducer;
 import org.apache.ignite.internal.event.EventParameters;
 import org.apache.ignite.internal.failure.FailureContext;
-import org.apache.ignite.internal.failure.FailureProcessor;
+import org.apache.ignite.internal.failure.FailureManager;
 import org.apache.ignite.internal.lang.IgniteInternalException;
 import org.apache.ignite.internal.lang.NodeStoppingException;
 import org.apache.ignite.internal.logger.IgniteLogger;
@@ -151,7 +152,7 @@ public class ClusterManagementGroupManager extends AbstractEventProducer<Cluster
     private final NodeAttributes nodeAttributes;
 
     /** Failure processor that is used to handle critical errors. */
-    private final FailureProcessor failureProcessor;
+    private final FailureManager failureManager;
 
     private final ClusterIdStore clusterIdStore;
 
@@ -175,7 +176,7 @@ public class ClusterManagementGroupManager extends AbstractEventProducer<Cluster
             LogicalTopology logicalTopology,
             ValidationManager validationManager,
             NodeAttributes nodeAttributes,
-            FailureProcessor failureProcessor,
+            FailureManager failureManager,
             ClusterIdStore clusterIdStore,
             RaftGroupOptionsConfigurer raftGroupOptionsConfigurer
     ) {
@@ -188,7 +189,7 @@ public class ClusterManagementGroupManager extends AbstractEventProducer<Cluster
         this.validationManager = validationManager;
         this.localStateStorage = new LocalStateStorage(vault);
         this.nodeAttributes = nodeAttributes;
-        this.failureProcessor = failureProcessor;
+        this.failureManager = failureManager;
         this.clusterIdStore = clusterIdStore;
         this.raftGroupOptionsConfigurer = raftGroupOptionsConfigurer;
 
@@ -198,7 +199,7 @@ public class ClusterManagementGroupManager extends AbstractEventProducer<Cluster
 
         cmgMessageHandler = createMessageHandler();
 
-        clusterService.messagingService().addMessageHandler(CmgMessageGroup.class, cmgMessageHandler);
+        clusterService.messagingService().addMessageHandler(CmgMessageGroup.class, message -> scheduledExecutor, cmgMessageHandler);
     }
 
     private CmgMessageHandler createMessageHandler() {
@@ -237,7 +238,7 @@ public class ClusterManagementGroupManager extends AbstractEventProducer<Cluster
             ClusterStateStorage clusterStateStorage,
             LogicalTopology logicalTopology,
             NodeAttributes nodeAttributes,
-            FailureProcessor failureProcessor,
+            FailureManager failureManager,
             ClusterIdStore clusterIdStore,
             RaftGroupOptionsConfigurer raftGroupOptionsConfigurer
     ) {
@@ -251,7 +252,7 @@ public class ClusterManagementGroupManager extends AbstractEventProducer<Cluster
                 logicalTopology,
                 new ValidationManager(new ClusterStateStorageManager(clusterStateStorage), logicalTopology),
                 nodeAttributes,
-                failureProcessor,
+                failureManager,
                 clusterIdStore,
                 raftGroupOptionsConfigurer
         );
@@ -264,11 +265,8 @@ public class ClusterManagementGroupManager extends AbstractEventProducer<Cluster
      * @param cmgNodeNames Names of nodes that will host the Cluster Management Group.
      * @param clusterName Human-readable name of the cluster.
      */
-    public void initCluster(
-            Collection<String> metaStorageNodeNames,
-            Collection<String> cmgNodeNames,
-            String clusterName
-    ) throws NodeStoppingException {
+    public void initCluster(Collection<String> metaStorageNodeNames, Collection<String> cmgNodeNames, String clusterName)
+            throws NodeStoppingException {
         sync(initClusterAsync(metaStorageNodeNames, cmgNodeNames, clusterName));
     }
 
@@ -369,7 +367,7 @@ public class ClusterManagementGroupManager extends AbstractEventProducer<Cluster
 
         return destroyCmgWithEvents()
                 .thenCompose(unused -> {
-                    if (resetClusterMessage.cmgNodes().contains(clusterService.nodeName())) {
+                    if (resetClusterMessage.newCmgNodes().contains(clusterService.nodeName())) {
                         return doReinit(resetClusterMessage);
                     } else {
                         // Let's just wait for new CMG nodes to establish a majority and send us an invitation to join.
@@ -377,16 +375,17 @@ public class ClusterManagementGroupManager extends AbstractEventProducer<Cluster
                         return nullCompletedFuture();
                     }
                 })
-                .thenRun(clusterResetStorage::removeResetClusterMessage);
+                .thenRun(clusterResetStorage::removeResetClusterMessage)
+                .thenRun(() -> clusterResetStorage.saveVolatileResetClusterMessage(resetClusterMessage));
     }
 
-    private CompletableFuture<Void> doReinit(ResetClusterMessage resetClusterMessage) {
+    private CompletableFuture<CmgRaftService> doReinit(ResetClusterMessage resetClusterMessage) {
         CompletableFuture<CmgRaftService> serviceFuture;
 
         synchronized (raftServiceLock) {
             // Disaster recovery means that the Repair Conductor has ensured the cluster was initialized,
             // so we can just pass null as initialClusterConfig.
-            serviceFuture = startCmgRaftServiceWithEvents(resetClusterMessage.cmgNodes(), null);
+            serviceFuture = startCmgRaftServiceWithEvents(resetClusterMessage.newCmgNodes(), null);
             raftService = serviceFuture;
         }
 
@@ -399,16 +398,16 @@ public class ClusterManagementGroupManager extends AbstractEventProducer<Cluster
                                 cmgInitMessageFromResetClusterMessage(resetClusterMessage),
                                 resetClusterMessage.formerClusterIds()
                         )
-                )
-                .thenApply(unused -> null);
+                );
     }
 
     private CmgInitMessage cmgInitMessageFromResetClusterMessage(ResetClusterMessage resetClusterMessage) {
         return msgFactory.cmgInitMessage()
-                .cmgNodes(resetClusterMessage.cmgNodes())
-                .metaStorageNodes(resetClusterMessage.metaStorageNodes())
+                .cmgNodes(resetClusterMessage.newCmgNodes())
+                .metaStorageNodes(resetClusterMessage.currentMetaStorageNodes())
                 .clusterName(resetClusterMessage.clusterName())
                 .clusterId(resetClusterMessage.clusterId())
+                .initialClusterConfiguration(resetClusterMessage.initialClusterConfiguration())
                 .build();
     }
 
@@ -527,8 +526,6 @@ public class ClusterManagementGroupManager extends AbstractEventProducer<Cluster
 
                     localStateStorage.saveLocalState(localState);
 
-                    clusterIdStore.clusterId(state.clusterTag().clusterId());
-
                     return joinCluster(service, state.clusterTag());
                 });
     }
@@ -610,7 +607,7 @@ public class ClusterManagementGroupManager extends AbstractEventProducer<Cluster
     private CompletableFuture<Void> updateLogicalTopology(CmgRaftService service) {
         return service.logicalTopology()
                 .thenCompose(logicalTopology -> inBusyLock(busyLock, () -> {
-                    Set<String> physicalTopologyIds = clusterService.topologyService().allMembers()
+                    Set<UUID> physicalTopologyIds = clusterService.topologyService().allMembers()
                             .stream()
                             .map(ClusterNode::id)
                             .collect(toSet());
@@ -636,7 +633,7 @@ public class ClusterManagementGroupManager extends AbstractEventProducer<Cluster
                 () -> fireEvent(ClusterManagerGroupEvent.BEFORE_DESTROY_RAFT_GROUP, EmptyEventParameters.INSTANCE)
                         .thenRunAsync(this::destroyCmg, this.scheduledExecutor)
                         .exceptionally(err -> {
-                            failureProcessor.process(new FailureContext(CRITICAL_ERROR, err));
+                            failureManager.process(new FailureContext(CRITICAL_ERROR, err));
                             throw (err instanceof RuntimeException) ? (RuntimeException) err : new CompletionException(err);
                         })
         );
@@ -780,8 +777,13 @@ public class ClusterManagementGroupManager extends AbstractEventProducer<Cluster
                     .startRaftGroupNodeAndWaitNodeReadyFuture(
                             raftNodeId(serverPeer),
                             raftConfiguration,
-                            new CmgRaftGroupListener(clusterStateStorageMgr, logicalTopology, validationManager,
-                                    this::onLogicalTopologyChanged),
+                            new CmgRaftGroupListener(
+                                    clusterStateStorageMgr,
+                                    logicalTopology,
+                                    validationManager,
+                                    this::onLogicalTopologyChanged,
+                                    clusterIdStore
+                            ),
                             this::onElectedAsLeader,
                             raftGroupOptionsConfigurer
                     )
@@ -823,8 +825,6 @@ public class ClusterManagementGroupManager extends AbstractEventProducer<Cluster
                     var localState = new LocalState(state.cmgNodes(), state.clusterTag());
 
                     localStateStorage.saveLocalState(localState);
-
-                    clusterIdStore.clusterId(state.clusterTag().clusterId());
 
                     return joinCluster(service, state.clusterTag());
                 });
@@ -968,14 +968,21 @@ public class ClusterManagementGroupManager extends AbstractEventProducer<Cluster
      * @return Future that, when complete, resolves into a list of node names that host the Meta Storage.
      */
     public CompletableFuture<Set<String>> metaStorageNodes() {
+        return metaStorageInfo()
+                .thenApply(MetaStorageInfo::metaStorageNodes);
+    }
+
+    /**
+     * Returns a future that, when complete, resolves into a Meta storage info.
+     */
+    public CompletableFuture<MetaStorageInfo> metaStorageInfo() {
         if (!busyLock.enterBusy()) {
             return failedFuture(new NodeStoppingException());
         }
 
         try {
             return raftServiceAfterJoin()
-                    .thenCompose(CmgRaftService::readClusterState)
-                    .thenApply(ClusterState::metaStorageNodes);
+                    .thenCompose(CmgRaftService::readMetaStorageInfo);
         } finally {
             busyLock.leaveBusy();
         }
@@ -1050,6 +1057,55 @@ public class ClusterManagementGroupManager extends AbstractEventProducer<Cluster
         } finally {
             busyLock.leaveBusy();
         }
+    }
+
+    /**
+     * Changes metastorage nodes in the CMG for the graceful Metastorage reconfiguration procedure.
+     *
+     * @param newMetastorageNodes Metastorage node names to set.
+     * @return Future that completes when the command is executed by the CMG.
+     */
+    public CompletableFuture<Void> changeMetastorageNodes(Set<String> newMetastorageNodes) {
+        return changeMetastorageNodesInternal(newMetastorageNodes, null);
+    }
+
+    /**
+     * Changes metastorage nodes in the CMG for the forceful (with repair) Metastorage reconfiguration procedure.
+     *
+     * @param newMetastorageNodes Metastorage node names to set.
+     * @param metastorageRepairingConfigIndex Raft index in the Metastorage group under which the forced configuration is
+     *     (or will be) saved.
+     * @return Future that completes when the command is executed by the CMG.
+     */
+    public CompletableFuture<Void> changeMetastorageNodes(Set<String> newMetastorageNodes, long metastorageRepairingConfigIndex) {
+        return changeMetastorageNodesInternal(newMetastorageNodes, metastorageRepairingConfigIndex);
+    }
+
+    private CompletableFuture<Void> changeMetastorageNodesInternal(
+            Set<String> newMetastorageNodes,
+            @Nullable Long metastorageRepairingConfigIndex
+    ) {
+        if (!busyLock.enterBusy()) {
+            return failedFuture(new NodeStoppingException());
+        }
+
+        UUID metastorageRepairClusterId = metastorageRepairingConfigIndex == null ? null : requiredClusterId();
+
+        try {
+            return raftServiceAfterJoin()
+                    .thenCompose(service -> service.changeMetastorageNodes(
+                            newMetastorageNodes,
+                            metastorageRepairClusterId,
+                            metastorageRepairingConfigIndex
+                    ));
+        } finally {
+            busyLock.leaveBusy();
+        }
+    }
+
+    private UUID requiredClusterId() {
+        ClusterState clusterState = clusterStateStorageMgr.getClusterState();
+        return requireNonNull(clusterState, "Still no cluster state.").clusterTag().clusterId();
     }
 
     /**

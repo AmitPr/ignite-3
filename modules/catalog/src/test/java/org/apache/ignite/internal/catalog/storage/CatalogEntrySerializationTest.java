@@ -223,7 +223,7 @@ public class CatalogEntrySerializationTest extends BaseIgniteAbstractTest {
 
         list.add(UUID.randomUUID());
 
-        // TODO Include ignored values to test after https://issues.apache.org/jira/browse/IGNITE-15200
+        // TODO Include ignored values to test after https://issues.apache.org/jira/browse/IGNITE-17373
         //  list.add(Duration.of(11, ChronoUnit.HOURS));
         //  list.add(Period.of(5, 4, 3));
 
@@ -446,12 +446,12 @@ public class CatalogEntrySerializationTest extends BaseIgniteAbstractTest {
         CatalogIndexColumnDescriptor idxCol4 = new CatalogIndexColumnDescriptor("C4", CatalogColumnCollation.ASC_NULLS_LAST);
 
         return new CatalogSortedIndexDescriptor(
-                1, name, 12, false, CatalogIndexStatus.AVAILABLE, List.of(idxCol1, idxCol2, idxCol3, idxCol4));
+                1, name, 12, false, CatalogIndexStatus.AVAILABLE, List.of(idxCol1, idxCol2, idxCol3, idxCol4), true);
     }
 
     private static CatalogHashIndexDescriptor newHashIndexDescriptor(String name) {
         return new CatalogHashIndexDescriptor(
-                1, name, 12, true, CatalogIndexStatus.REGISTERED, List.of("C1", "C2"));
+                1, name, 12, true, CatalogIndexStatus.REGISTERED, List.of("C1", "C2"), true);
     }
 
     private static CatalogTableDescriptor newTableDescriptor(String name, List<CatalogTableColumnDescriptor> columns) {

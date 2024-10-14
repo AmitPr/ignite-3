@@ -18,12 +18,118 @@
 #include <ignite/odbc/sql_statement.h>
 #include <ignite/odbc/query/data_query.h>
 
-#include <ignite/common/detail/config.h>
-
-#include "module.h"
+#include "utils.h"
 #include "py_cursor.h"
+#include "type_conversion.h"
 
 #include <Python.h>
+
+/**
+ * Python parameter set.
+ */
+class py_parameter_set : public ignite::parameter_set {
+public:
+    /**
+     * Constructor.
+     *
+     * @param params Python parameters sequence.
+     */
+    py_parameter_set(Py_ssize_t size, PyObject *params) : m_size(size), m_params(params) {}
+
+    /**
+     * Write only first row of the param set using provided writer.
+     *
+     * @param writer Writer.
+     */
+    virtual void write(ignite::protocol::writer &writer) const override {
+        auto row_size = std::int32_t(m_size);
+        if (!row_size) {
+            writer.write_nil();
+            return;
+        }
+
+        writer.write(row_size);
+        ignite::binary_tuple_builder row_builder{row_size * 3};
+        row_builder.start();
+
+        for (std::int32_t idx = 0; idx < row_size; ++idx) {
+            submit_pyobject(row_builder, PySequence_GetItem(m_params, idx), true);
+        }
+
+        row_builder.layout();
+
+        for (std::int32_t idx = 0; idx < row_size; ++idx) {
+            submit_pyobject(row_builder, PySequence_GetItem(m_params, idx), false);
+        }
+
+        auto row_data = row_builder.build();
+        writer.write_binary(row_data);
+    }
+
+    /**
+     * Write rows of the param set in interval [begin, end) using provided writer.
+     *
+     * @param writer Writer.
+     * @param begin Beginning of the interval.
+     * @param end End of the interval.
+     * @param last Last page flag.
+     */
+    virtual void write(ignite::protocol::writer &writer, SQLULEN begin, SQLULEN end, bool last) const override {
+        // TODO: IGNITE-22742 Implement execution with a batch of parameters
+        throw ignite::ignite_error("Execution with the batch of parameters is not implemented");
+    }
+
+    /**
+     * Get parameter set size.
+     *
+     * @return Number of rows in set.
+     */
+    [[nodiscard]] virtual std::int32_t get_param_set_size() const override {
+        // TODO: IGNITE-22742 Implement execution with a batch of parameters
+        return 1;
+    }
+
+    /**
+     * Set number of parameters processed in batch.
+     *
+     * @param processed Processed.
+     */
+    virtual void set_params_processed(SQLULEN processed) override { m_processed = processed; }
+
+    /**
+     * Get pointer to array in which to return the status of each set of parameters.
+     *
+     * @return Value.
+     */
+    [[nodiscard]] virtual SQLUSMALLINT *get_params_status_ptr() const override {
+        // TODO: IGNITE-22742 Implement execution with a batch of parameters
+        return nullptr;
+    }
+
+private:
+    /** Size. */
+    Py_ssize_t m_size{0};
+
+    /** Python sequence of parameters. */
+    PyObject *m_params{nullptr};
+
+    /** Processed params. */
+    SQLULEN m_processed{0};
+};
+
+/**
+ * Check if the cursor is open. Set error if not.
+ * @param self Cursor.
+ * @return @c true if open and @c false otherwise.
+ */
+static bool py_cursor_expect_open(py_cursor* self) {
+    if (!self->m_statement) {
+        PyErr_SetString(py_get_module_interface_error_class(), "Cursor is in invalid state (Already closed?)");
+        return false;
+    }
+    return true;
+}
+
 
 int py_cursor_init(py_cursor *self, PyObject *args, PyObject *kwds)
 {
@@ -53,16 +159,13 @@ static PyObject* py_cursor_close(py_cursor* self, PyObject*)
         self->m_statement = nullptr;
     }
 
-    Py_INCREF(Py_None);
-    return Py_None;
+    Py_RETURN_NONE;
 }
 
 static PyObject* py_cursor_execute(py_cursor* self, PyObject* args, PyObject* kwargs)
 {
-    if (!self->m_statement) {
-        PyErr_SetString(PyExc_RuntimeError, "Cursor is in invalid state (Already closed?)");
+    if (!py_cursor_expect_open(self))
         return nullptr;
-    }
 
     static char *kwlist[] = {
         "query",
@@ -71,28 +174,43 @@ static PyObject* py_cursor_execute(py_cursor* self, PyObject* args, PyObject* kw
     };
 
     const char* query = nullptr;
-    // TODO IGNITE-23126 Support parameters
     PyObject *params = nullptr;
 
     int parsed = PyArg_ParseTupleAndKeywords(args, kwargs, "s|O", kwlist, &query, &params);
-
     if (!parsed)
         return nullptr;
 
-    self->m_statement->execute_sql_query(query);
+    Py_ssize_t size{0};
+    if (params && params != Py_None) {
+        if (PySequence_Check(params)) {
+            size = PySequence_Size(params);
+            if (size < 0) {
+                PyErr_SetString(py_get_module_interface_error_class(),
+                    "Internal error while getting size of the parameters sequence");
+
+                return nullptr;
+            }
+        } else {
+            auto msg_str = std::string("The object does not provide the sequence protocol: ")
+                + py_object_get_typename(params);
+
+            PyErr_SetString(py_get_module_interface_error_class(), msg_str.c_str());
+            return nullptr;
+        }
+    }
+
+    py_parameter_set py_params(size, params);
+    self->m_statement->execute_sql_query(query, py_params);
     if (!check_errors(*self->m_statement))
         return nullptr;
 
-    Py_INCREF(Py_None);
-    return Py_None;
+    Py_RETURN_NONE;
 }
 
 static PyObject* py_cursor_rowcount(py_cursor* self, PyObject*)
 {
-    if (!self->m_statement) {
-        PyErr_SetString(PyExc_RuntimeError, "Cursor is in invalid state (Already closed?)");
+    if (!py_cursor_expect_open(self))
         return nullptr;
-    }
 
     auto query = self->m_statement->get_query();
 
@@ -102,112 +220,31 @@ static PyObject* py_cursor_rowcount(py_cursor* self, PyObject*)
     return PyLong_FromLong(long(query->affected_rows()));
 }
 
-static PyObject* primitive_to_pyobject(ignite::primitive value) {
-    using ignite::ignite_type;
-
-    if (value.is_null()) {
-        Py_INCREF(Py_None);
-        return Py_None;
-    }
-
-    switch (value.get_type()) {
-        case ignite_type::STRING: {
-            auto &str_val = value.get<std::string>();
-            return PyUnicode_FromStringAndSize(str_val.c_str(), str_val.size());
-        }
-
-        case ignite_type::INT8: {
-            auto &i8_val =  value.get<std::int8_t>();
-            return PyLong_FromLong(long(i8_val));
-        }
-
-        case ignite_type::INT16: {
-            auto &i16_val =  value.get<std::int16_t>();
-            return PyLong_FromLong(long(i16_val));
-        }
-
-        case ignite_type::INT32: {
-            auto &i32_val =  value.get<std::int32_t>();
-            return PyLong_FromLong(long(i32_val));
-        }
-
-        case ignite_type::INT64: {
-            auto &i64_val =  value.get<std::int64_t>();
-            return PyLong_FromLongLong(i64_val);
-        }
-
-        case ignite_type::FLOAT: {
-            auto &float_val =  value.get<float>();
-            return PyFloat_FromDouble(float_val);
-        }
-
-        case ignite_type::DOUBLE: {
-            auto &double_val =  value.get<double>();
-            return PyFloat_FromDouble(double_val);
-        }
-
-        case ignite_type::BOOLEAN: {
-            auto &bool_val =  value.get<bool>();
-            if (bool_val) {
-                Py_RETURN_TRUE;
-            } else {
-                Py_RETURN_FALSE;
-            }
-        }
-
-        case ignite_type::BYTE_ARRAY: {
-            auto &blob_val =  value.get<std::vector<std::byte>>();
-            return PyBytes_FromStringAndSize((const char*)blob_val.data(), blob_val.size());
-        }
-
-        case ignite_type::UUID:
-        case ignite_type::DATE:
-        case ignite_type::TIMESTAMP:
-        case ignite_type::TIME:
-        case ignite_type::DATETIME:
-        case ignite_type::BITMASK:
-        case ignite_type::DECIMAL:
-        case ignite_type::PERIOD:
-        case ignite_type::DURATION:
-        case ignite_type::NUMBER:
-        default: {
-            // TODO: IGNITE-22745 Provide wider data types support
-            auto err_msg = "The type is not supported yet: " + std::to_string(int(value.get_type()));
-            PyErr_SetString(PyExc_RuntimeError, err_msg.c_str());
-            return nullptr;
-        }
-    }
-}
-
 static PyObject* py_cursor_fetchone(py_cursor* self, PyObject*)
 {
-    if (!self->m_statement) {
-        PyErr_SetString(PyExc_RuntimeError, "Cursor is in invalid state (Already closed?)");
+    if (!py_cursor_expect_open(self))
         return nullptr;
-    }
 
     auto query = self->m_statement->get_query();
     if (!query) {
-        PyErr_SetString(PyExc_RuntimeError, "Query was not executed");
+        PyErr_SetString(py_get_module_interface_error_class(), "Query was not executed");
         return nullptr;
     }
 
     if (query->get_type() != ignite::query_type::DATA) {
         auto err_msg = "Unexpected query type: " + std::to_string(int(query->get_type()));
-        PyErr_SetString(PyExc_RuntimeError, err_msg.c_str());
+        PyErr_SetString(py_get_module_interface_error_class(), err_msg.c_str());
         return nullptr;
     }
 
     if (!query->is_data_available()) {
-        Py_INCREF(Py_None);
-        return Py_None;
+        Py_RETURN_NONE;
     }
 
     auto& query0 = static_cast<ignite::data_query&>(*query);
     auto res = query0.fetch_next_row();
     if (res == ignite::sql_result::AI_NO_DATA) {
-        Py_INCREF(Py_None);
-        return Py_None;
+        Py_RETURN_NONE;
     }
 
     if (!check_errors(*self->m_statement)) {
@@ -217,7 +254,7 @@ static PyObject* py_cursor_fetchone(py_cursor* self, PyObject*)
     auto row = query0.get_current_row();
     auto res_list = PyTuple_New(row.size());
     if (!res_list) {
-        PyErr_SetString(PyExc_RuntimeError, "Can not allocate a new list for the result set");
+        PyErr_SetString(py_get_module_operational_error_class(), "Can not allocate a new list for the result set");
         return nullptr;
     }
 
@@ -235,10 +272,8 @@ static PyObject* py_cursor_fetchone(py_cursor* self, PyObject*)
 
 static PyObject* py_cursor_column_count(py_cursor* self, PyObject*)
 {
-    if (!self->m_statement) {
-        PyErr_SetString(PyExc_RuntimeError, "Cursor is in invalid state (Already closed?)");
+    if (!py_cursor_expect_open(self))
         return nullptr;
-    }
 
     auto query = self->m_statement->get_query();
 
@@ -265,7 +300,7 @@ const ignite::column_meta *get_meta_column(py_cursor* self, long idx, PyObject *
     }
 
     if (idx < 0 || idx >= long(meta->size())) {
-        PyErr_SetString(PyExc_RuntimeError, "Column metadata index is out of bound");
+        PyErr_SetString(py_get_module_interface_error_class(), "Column metadata index is out of bound");
         return nullptr;
     }
 
@@ -274,10 +309,8 @@ const ignite::column_meta *get_meta_column(py_cursor* self, long idx, PyObject *
 
 static PyObject* py_cursor_column_name(py_cursor* self, PyObject* args)
 {
-    if (!self->m_statement) {
-        PyErr_SetString(PyExc_RuntimeError, "Cursor is in invalid state (Already closed?)");
+    if (!py_cursor_expect_open(self))
         return nullptr;
-    }
 
     long idx{0};
 
@@ -295,10 +328,8 @@ static PyObject* py_cursor_column_name(py_cursor* self, PyObject* args)
 
 static PyObject* py_cursor_column_type_code(py_cursor* self, PyObject* args)
 {
-    if (!self->m_statement) {
-        PyErr_SetString(PyExc_RuntimeError, "Cursor is in invalid state (Already closed?)");
+    if (!py_cursor_expect_open(self))
         return nullptr;
-    }
 
     long idx{0};
 
@@ -314,34 +345,26 @@ static PyObject* py_cursor_column_type_code(py_cursor* self, PyObject* args)
     return PyLong_FromLong(long(column->get_data_type()));
 }
 
-static PyObject* py_cursor_column_display_size(py_cursor* self, PyObject* args)
+static PyObject* py_cursor_column_display_size(py_cursor* self, PyObject*)
 {
-    if (!self->m_statement) {
-        PyErr_SetString(PyExc_RuntimeError, "Cursor is in invalid state (Already closed?)");
+    if (!py_cursor_expect_open(self))
         return nullptr;
-    }
 
-    Py_INCREF(Py_None);
-    return Py_None;
+    Py_RETURN_NONE;
 }
 
-static PyObject* py_cursor_column_internal_size(py_cursor* self, PyObject* args)
+static PyObject* py_cursor_column_internal_size(py_cursor* self, PyObject*)
 {
-    if (!self->m_statement) {
-        PyErr_SetString(PyExc_RuntimeError, "Cursor is in invalid state (Already closed?)");
+    if (!py_cursor_expect_open(self))
         return nullptr;
-    }
 
-    Py_INCREF(Py_None);
-    return Py_None;
+    Py_RETURN_NONE;
 }
 
 static PyObject* py_cursor_column_precision(py_cursor* self, PyObject* args)
 {
-    if (!self->m_statement) {
-        PyErr_SetString(PyExc_RuntimeError, "Cursor is in invalid state (Already closed?)");
+    if (!py_cursor_expect_open(self))
         return nullptr;
-    }
 
     long idx{0};
 
@@ -359,10 +382,8 @@ static PyObject* py_cursor_column_precision(py_cursor* self, PyObject* args)
 
 static PyObject* py_cursor_column_scale(py_cursor* self, PyObject* args)
 {
-    if (!self->m_statement) {
-        PyErr_SetString(PyExc_RuntimeError, "Cursor is in invalid state (Already closed?)");
+    if (!py_cursor_expect_open(self))
         return nullptr;
-    }
 
     long idx{0};
 
@@ -380,10 +401,8 @@ static PyObject* py_cursor_column_scale(py_cursor* self, PyObject* args)
 
 static PyObject* py_cursor_null_ok(py_cursor* self, PyObject* args)
 {
-    if (!self->m_statement) {
-        PyErr_SetString(PyExc_RuntimeError, "Cursor is in invalid state (Already closed?)");
+    if (!py_cursor_expect_open(self))
         return nullptr;
-    }
 
     long idx{0};
 
@@ -401,7 +420,7 @@ static PyObject* py_cursor_null_ok(py_cursor* self, PyObject* args)
 
 static PyTypeObject py_cursor_type = {
     PyVarObject_HEAD_INIT(nullptr, 0)
-    MODULE_NAME "." PY_CURSOR_CLASS_NAME
+    EXT_MODULE_NAME "." PY_CURSOR_CLASS_NAME
 };
 
 static struct PyMethodDef py_cursor_methods[] = {

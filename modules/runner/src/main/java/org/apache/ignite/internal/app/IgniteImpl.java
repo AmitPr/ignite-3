@@ -27,6 +27,7 @@ import static org.apache.ignite.internal.configuration.IgnitePaths.vaultPath;
 import static org.apache.ignite.internal.distributionzones.rebalance.RebalanceUtil.REBALANCE_SCHEDULER_POOL_SIZE;
 import static org.apache.ignite.internal.thread.ThreadOperation.STORAGE_READ;
 import static org.apache.ignite.internal.thread.ThreadOperation.STORAGE_WRITE;
+import static org.apache.ignite.internal.util.CompletableFutures.copyStateTo;
 import static org.apache.ignite.internal.util.CompletableFutures.nullCompletedFuture;
 
 import com.typesafe.config.Config;
@@ -39,6 +40,7 @@ import java.util.Map;
 import java.util.Map.Entry;
 import java.util.ServiceLoader;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutionException;
@@ -47,6 +49,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BiPredicate;
 import java.util.function.Consumer;
 import java.util.function.LongFunction;
@@ -121,6 +124,7 @@ import org.apache.ignite.internal.deployunit.IgniteDeployment;
 import org.apache.ignite.internal.deployunit.configuration.DeploymentExtensionConfiguration;
 import org.apache.ignite.internal.deployunit.metastore.DeploymentUnitStoreImpl;
 import org.apache.ignite.internal.disaster.system.ClusterIdService;
+import org.apache.ignite.internal.disaster.system.MetastorageRepairImpl;
 import org.apache.ignite.internal.disaster.system.ServerRestarter;
 import org.apache.ignite.internal.disaster.system.SystemDisasterRecoveryManager;
 import org.apache.ignite.internal.disaster.system.SystemDisasterRecoveryManagerImpl;
@@ -129,7 +133,7 @@ import org.apache.ignite.internal.distributionzones.DistributionZoneManager;
 import org.apache.ignite.internal.eventlog.config.schema.EventLogConfiguration;
 import org.apache.ignite.internal.eventlog.config.schema.EventLogExtensionConfiguration;
 import org.apache.ignite.internal.eventlog.impl.EventLogImpl;
-import org.apache.ignite.internal.failure.FailureProcessor;
+import org.apache.ignite.internal.failure.FailureManager;
 import org.apache.ignite.internal.failure.configuration.FailureProcessorConfiguration;
 import org.apache.ignite.internal.failure.configuration.FailureProcessorExtensionConfiguration;
 import org.apache.ignite.internal.hlc.ClockService;
@@ -205,6 +209,7 @@ import org.apache.ignite.internal.rest.deployment.CodeDeploymentRestFactory;
 import org.apache.ignite.internal.rest.metrics.MetricRestFactory;
 import org.apache.ignite.internal.rest.node.NodeManagementRestFactory;
 import org.apache.ignite.internal.rest.recovery.DisasterRecoveryFactory;
+import org.apache.ignite.internal.rest.recovery.system.SystemDisasterRecoveryFactory;
 import org.apache.ignite.internal.schema.SchemaManager;
 import org.apache.ignite.internal.schema.SchemaSyncService;
 import org.apache.ignite.internal.schema.configuration.GcConfiguration;
@@ -233,6 +238,7 @@ import org.apache.ignite.internal.table.distributed.PublicApiThreadingIgniteTabl
 import org.apache.ignite.internal.table.distributed.TableManager;
 import org.apache.ignite.internal.table.distributed.disaster.DisasterRecoveryManager;
 import org.apache.ignite.internal.table.distributed.index.IndexMetaStorage;
+import org.apache.ignite.internal.table.distributed.raft.MinimumRequiredTimeCollectorServiceImpl;
 import org.apache.ignite.internal.table.distributed.raft.snapshot.outgoing.OutgoingSnapshotsManager;
 import org.apache.ignite.internal.table.distributed.schema.CheckCatalogVersionOnActionRequest;
 import org.apache.ignite.internal.table.distributed.schema.CheckCatalogVersionOnAppendEntries;
@@ -309,7 +315,7 @@ public class IgniteImpl implements Ignite {
     private final CriticalWorkerWatchdog criticalWorkerRegistry;
 
     /** Failure processor. */
-    private final FailureProcessor failureProcessor;
+    private final FailureManager failureManager;
 
     /** Netty bootstrap factory. */
     private final NettyBootstrapFactory nettyBootstrapFactory;
@@ -441,6 +447,10 @@ public class IgniteImpl implements Ignite {
 
     private final IndexMetaStorage indexMetaStorage;
 
+    private final AtomicBoolean stopGuard = new AtomicBoolean();
+
+    private final CompletableFuture<Void> stopFuture = new CompletableFuture<>();
+
     /**
      * The Constructor.
      *
@@ -511,7 +521,7 @@ public class IgniteImpl implements Ignite {
 
         FailureProcessorConfiguration failureProcessorConfiguration = nodeConfigRegistry.getConfiguration(
                 FailureProcessorExtensionConfiguration.KEY).failureHandler();
-        failureProcessor = new FailureProcessor(node::shutdown, failureProcessorConfiguration);
+        failureManager = new FailureManager(node::shutdown, failureProcessorConfiguration);
 
         CriticalWorkersConfiguration criticalWorkersConfiguration = nodeConfigRegistry
                 .getConfiguration(CriticalWorkersExtensionConfiguration.KEY).criticalWorkers();
@@ -528,7 +538,7 @@ public class IgniteImpl implements Ignite {
         criticalWorkerRegistry = new CriticalWorkerWatchdog(
                 criticalWorkersConfiguration,
                 threadPoolsManager.commonScheduler(),
-                failureProcessor
+                failureManager
         );
 
         nettyBootstrapFactory = new NettyBootstrapFactory(networkConfiguration, name);
@@ -537,7 +547,7 @@ public class IgniteImpl implements Ignite {
                 threadPoolsManager.commonScheduler(),
                 nettyBootstrapFactory,
                 criticalWorkersConfiguration,
-                failureProcessor
+                failureManager
         );
 
         clusterSvc = new ScaleCubeClusterServiceFactory().createClusterService(
@@ -548,15 +558,7 @@ public class IgniteImpl implements Ignite {
                 new VaultStaleIds(vaultMgr),
                 clusterIdService,
                 criticalWorkerRegistry,
-                failureProcessor
-        );
-
-        systemDisasterRecoveryManager = new SystemDisasterRecoveryManagerImpl(
-                name,
-                clusterSvc.topologyService(),
-                clusterSvc.messagingService(),
-                vaultMgr,
-                restarter
+                failureManager
         );
 
         clock = new HybridClockImpl();
@@ -570,8 +572,14 @@ public class IgniteImpl implements Ignite {
 
         ComponentWorkingDir partitionsWorkDir = partitionsPath(systemConfiguration, workDir);
 
-        partitionsLogStorageFactory =
-                SharedLogStorageFactoryUtils.create("table data log", clusterSvc.nodeName(), partitionsWorkDir.raftLogPath());
+        boolean raftUseFsync = raftConfiguration.fsync().value();
+
+        partitionsLogStorageFactory = SharedLogStorageFactoryUtils.create(
+                "table data log",
+                clusterSvc.nodeName(),
+                partitionsWorkDir.raftLogPath(),
+                raftUseFsync
+        );
 
         raftMgr = new Loza(
                 clusterSvc,
@@ -579,7 +587,7 @@ public class IgniteImpl implements Ignite {
                 raftConfiguration,
                 clock,
                 raftGroupEventsClientListener,
-                failureProcessor
+                failureManager
         );
 
         LockManager lockMgr = new HeapLockManager();
@@ -590,13 +598,17 @@ public class IgniteImpl implements Ignite {
                 message -> threadPoolsManager.partitionOperationsExecutor()
         );
 
-        cmgLogStorageFactory =
-                SharedLogStorageFactoryUtils.create("cluster-management-group log", clusterSvc.nodeName(), cmgWorkDir.raftLogPath());
+        cmgLogStorageFactory = SharedLogStorageFactoryUtils.create(
+                "cluster-management-group log",
+                clusterSvc.nodeName(),
+                cmgWorkDir.raftLogPath(),
+                true
+        );
 
         RaftGroupOptionsConfigurer cmgRaftConfigurer =
                 RaftGroupOptionsConfigHelper.configureProperties(cmgLogStorageFactory, cmgWorkDir.metaPath());
 
-        var logicalTopology = new LogicalTopologyImpl(clusterStateStorage, clusterIdService);
+        var logicalTopology = new LogicalTopologyImpl(clusterStateStorage);
 
         ConfigurationTreeGenerator distributedConfigurationGenerator = new ConfigurationTreeGenerator(
                 modules.distributed().rootKeys(),
@@ -640,7 +652,7 @@ public class IgniteImpl implements Ignite {
                 logicalTopology,
                 validationManager,
                 nodeAttributesCollector,
-                failureProcessor,
+                failureManager,
                 clusterIdService,
                 cmgRaftConfigurer
         );
@@ -656,8 +668,12 @@ public class IgniteImpl implements Ignite {
 
         ComponentWorkingDir metastorageWorkDir = metastoragePath(systemConfiguration, workDir);
 
-        msLogStorageFactory =
-                SharedLogStorageFactoryUtils.create("meta-storage log", clusterSvc.nodeName(), metastorageWorkDir.raftLogPath());
+        msLogStorageFactory = SharedLogStorageFactoryUtils.create(
+                "meta-storage log",
+                clusterSvc.nodeName(),
+                metastorageWorkDir.raftLogPath(),
+                true
+        );
 
         RaftGroupOptionsConfigurer msRaftConfigurer =
                 RaftGroupOptionsConfigHelper.configureProperties(msLogStorageFactory, metastorageWorkDir.metaPath());
@@ -667,10 +683,12 @@ public class IgniteImpl implements Ignite {
                 cmgMgr,
                 logicalTopologyService,
                 raftMgr,
-                new RocksDbKeyValueStorage(name, metastorageWorkDir.dbPath(), failureProcessor),
+                new RocksDbKeyValueStorage(name, metastorageWorkDir.dbPath(), failureManager),
                 clock,
                 topologyAwareRaftGroupServiceFactory,
                 metricManager,
+                systemDisasterRecoveryStorage,
+                new MetastorageRepairImpl(clusterSvc.messagingService(), logicalTopology, cmgMgr),
                 msRaftConfigurer
         );
 
@@ -686,6 +704,16 @@ public class IgniteImpl implements Ignite {
         ConfigurationRegistry clusterConfigRegistry = clusterCfgMgr.configurationRegistry();
 
         metaStorageMgr.configure(clusterConfigRegistry.getConfiguration(MetaStorageExtensionConfiguration.KEY).metaStorage());
+
+        systemDisasterRecoveryManager = new SystemDisasterRecoveryManagerImpl(
+                name,
+                clusterSvc.topologyService(),
+                clusterSvc.messagingService(),
+                vaultMgr,
+                restarter,
+                metaStorageMgr,
+                clusterIdService
+        );
 
         SchemaSynchronizationConfiguration schemaSyncConfig = clusterConfigRegistry
                 .getConfiguration(SchemaSynchronizationExtensionConfiguration.KEY).schemaSync();
@@ -707,6 +735,9 @@ public class IgniteImpl implements Ignite {
 
         Consumer<LongFunction<CompletableFuture<?>>> registry = c -> metaStorageMgr.registerRevisionUpdateListener(c::apply);
 
+        ReplicationConfiguration replicationConfig = clusterConfigRegistry
+                .getConfiguration(ReplicationExtensionConfiguration.KEY).replication();
+
         placementDriverMgr = new PlacementDriverManager(
                 name,
                 metaStorageMgr,
@@ -716,11 +747,9 @@ public class IgniteImpl implements Ignite {
                 logicalTopologyService,
                 raftMgr,
                 topologyAwareRaftGroupServiceFactory,
-                clockService
+                clockService,
+                replicationConfig
         );
-
-        ReplicationConfiguration replicationConfig = clusterConfigRegistry
-                .getConfiguration(ReplicationExtensionConfiguration.KEY).replication();
 
         ReplicaService replicaSvc = new ReplicaService(
                 messagingServiceReturningToStorageOperationsPool,
@@ -752,7 +781,7 @@ public class IgniteImpl implements Ignite {
                 placementDriverMgr.placementDriver(),
                 threadPoolsManager.partitionOperationsExecutor(),
                 partitionIdleSafeTimePropagationPeriodMsSupplier,
-                failureProcessor,
+                failureManager,
                 raftMarshaller,
                 topologyAwareRaftGroupServiceFactory,
                 raftMgr,
@@ -782,7 +811,7 @@ public class IgniteImpl implements Ignite {
                 nodeConfigRegistry,
                 storagePath,
                 longJvmPauseDetector,
-                failureProcessor,
+                failureManager,
                 logSyncer,
                 clock
         );
@@ -815,7 +844,7 @@ public class IgniteImpl implements Ignite {
                 gcConfig.lowWatermark(),
                 clockService,
                 vaultMgr,
-                failureProcessor,
+                failureManager,
                 clusterSvc.messagingService()
         );
 
@@ -860,6 +889,8 @@ public class IgniteImpl implements Ignite {
                 clock
         );
 
+        MinimumRequiredTimeCollectorServiceImpl minTimeCollectorService = new MinimumRequiredTimeCollectorServiceImpl();
+
         CatalogCompactionRunner catalogCompactionRunner = new CatalogCompactionRunner(
                 name,
                 catalogManager,
@@ -871,7 +902,8 @@ public class IgniteImpl implements Ignite {
                 schemaSyncService,
                 clusterSvc.topologyService(),
                 threadPoolsManager.commonScheduler(),
-                indexNodeFinishedRwTransactionsChecker
+                indexNodeFinishedRwTransactionsChecker,
+                minTimeCollectorService
         );
 
         metaStorageMgr.addElectionListener(catalogCompactionRunner::updateCoordinator);
@@ -949,7 +981,8 @@ public class IgniteImpl implements Ignite {
                 transactionInflights,
                 indexMetaStorage,
                 logSyncer,
-                partitionReplicaLifecycleManager
+                partitionReplicaLifecycleManager,
+                minTimeCollectorService
         );
 
         disasterRecoveryManager = new DisasterRecoveryManager(
@@ -1000,13 +1033,14 @@ public class IgniteImpl implements Ignite {
                 catalogManager,
                 metricManager,
                 systemViewManager,
-                failureProcessor,
+                failureManager,
                 partitionIdleSafeTimePropagationPeriodMsSupplier,
                 placementDriverMgr.placementDriver(),
                 clusterConfigRegistry.getConfiguration(SqlClusterExtensionConfiguration.KEY).sql(),
                 nodeConfigRegistry.getConfiguration(SqlNodeExtensionConfiguration.KEY).sql(),
                 transactionInflights,
                 txManager,
+                lowWatermark,
                 threadPoolsManager.commonScheduler()
         );
 
@@ -1056,7 +1090,7 @@ public class IgniteImpl implements Ignite {
                 compute,
                 clusterSvc,
                 nettyBootstrapFactory,
-                () -> clusterInfo(systemDisasterRecoveryStorage),
+                () -> clusterInfo(clusterStateStorageMgr),
                 metricManager,
                 new ClientHandlerMetricSource(),
                 authenticationManager,
@@ -1079,8 +1113,11 @@ public class IgniteImpl implements Ignite {
         publicCatalog = new PublicApiThreadingIgniteCatalog(new IgniteCatalogSqlImpl(sql, distributedTblMgr), asyncContinuationExecutor);
     }
 
-    private static ClusterInfo clusterInfo(SystemDisasterRecoveryStorage systemDisasterRecoveryStorage) {
-        ClusterState clusterState = systemDisasterRecoveryStorage.readClusterState();
+    private static ClusterInfo clusterInfo(ClusterStateStorageManager clusterStateStorageManager) {
+        // It is safe to read cluster state from CMG state as it can only be read when the node is initialized and fully started,
+        // and in those moments the cluster state is already available in the CMG state storage.
+
+        ClusterState clusterState = clusterStateStorageManager.getClusterState();
 
         assert clusterState != null : "Cluster state cannot be null at the moment when a client connects";
 
@@ -1134,6 +1171,7 @@ public class IgniteImpl implements Ignite {
         Supplier<RestFactory> restManagerFactory = () -> new RestManagerFactory(restManager);
         Supplier<RestFactory> computeRestFactory = () -> new ComputeRestFactory(compute);
         Supplier<RestFactory> disasterRecoveryFactory = () -> new DisasterRecoveryFactory(disasterRecoveryManager);
+        Supplier<RestFactory> systemDisasterRecoveryFactory = () -> new SystemDisasterRecoveryFactory(systemDisasterRecoveryManager);
 
         RestConfiguration restConfiguration = nodeCfgMgr.configurationRegistry().getConfiguration(RestExtensionConfiguration.KEY).rest();
 
@@ -1146,7 +1184,8 @@ public class IgniteImpl implements Ignite {
                         authProviderFactory,
                         restManagerFactory,
                         computeRestFactory,
-                        disasterRecoveryFactory
+                        disasterRecoveryFactory,
+                        systemDisasterRecoveryFactory
                 ),
                 restManager,
                 restConfiguration
@@ -1211,14 +1250,14 @@ public class IgniteImpl implements Ignite {
                     vaultMgr,
                     threadPoolsManager,
                     clockWaiter,
-                    failureProcessor,
+                    failureManager,
                     clusterStateStorage,
                     clusterIdService,
+                    systemDisasterRecoveryManager,
                     criticalWorkerRegistry,
                     nettyBootstrapFactory,
                     nettyWorkersRegistrar,
                     clusterSvc,
-                    systemDisasterRecoveryManager,
                     restComponent,
                     partitionsLogStorageFactory,
                     msLogStorageFactory,
@@ -1424,12 +1463,19 @@ public class IgniteImpl implements Ignite {
      * Asynchronously stops ignite node.
      */
     public CompletableFuture<Void> stopAsync() {
+        if (!stopGuard.compareAndSet(false, true)) {
+            return stopFuture;
+        }
+
         ExecutorService lifecycleExecutor = stopExecutor();
 
         // TODO https://issues.apache.org/jira/browse/IGNITE-22570
-        return lifecycleManager.stopNode(new ComponentContext(lifecycleExecutor))
+        lifecycleManager.stopNode(new ComponentContext(lifecycleExecutor))
                 // Moving to the common pool on purpose to close the stop pool and proceed user's code in the common pool.
-                .whenCompleteAsync((res, ex) -> lifecycleExecutor.shutdownNow());
+                .whenCompleteAsync((res, ex) -> lifecycleExecutor.shutdownNow())
+                .whenCompleteAsync(copyStateTo(stopFuture));
+
+        return stopFuture;
     }
 
     private ExecutorService stopExecutor() {
@@ -1474,8 +1520,8 @@ public class IgniteImpl implements Ignite {
     }
 
     @TestOnly
-    public FailureProcessor failureProcessor() {
-        return failureProcessor;
+    public FailureManager failureProcessor() {
+        return failureManager;
     }
 
     @TestOnly
@@ -1550,7 +1596,7 @@ public class IgniteImpl implements Ignite {
      * Returns the id of the current node.
      */
     // TODO: should be encapsulated in local properties, see https://issues.apache.org/jira/browse/IGNITE-15131
-    public String id() {
+    public UUID id() {
         return clusterSvc.topologyService().localMember().id();
     }
 

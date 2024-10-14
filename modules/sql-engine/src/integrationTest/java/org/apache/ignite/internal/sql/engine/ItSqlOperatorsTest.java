@@ -23,6 +23,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.Period;
@@ -102,7 +103,7 @@ public class ItSqlOperatorsTest extends BaseSqlIntegrationTest {
     public void testAggregates() {
         assertExpression("COUNT(*)").returns(1L).check();
         assertExpression("SUM(val)").returns(1L).check();
-        assertExpression("AVG(val)").returns(1).check();
+        assertExpression("AVG(val)").returns(BigDecimal.ONE.setScale(16, RoundingMode.UNNECESSARY)).check();
         assertExpression("MIN(val)").returns(1).check();
         assertExpression("MAX(val)").returns(1).check();
         assertExpression("ANY_VALUE(val)").returns(1).check();
@@ -341,8 +342,11 @@ public class ItSqlOperatorsTest extends BaseSqlIntegrationTest {
     public void testNullIf() {
         assertExpression("NULLIF(1, 2)").returns(1).check();
         assertExpression("NULLIF(1, 1)").returns(null).check();
-        assertThrowsSqlException(Sql.RUNTIME_ERR, "Character b is neither a decimal digit number, "
-                        + "decimal point, nor \"e\" notation exponential mark", () -> sql("SELECT NULLIF(12.2, 'b')"));
+        assertThrowsSqlException(
+                Sql.STMT_VALIDATION_ERR,
+                "Cannot apply '=' to arguments of type '<DECIMAL(3, 1)> = <CHAR(1)>'",
+                () -> sql("SELECT NULLIF(12.2, 'b')")
+        );
     }
 
     @Test
