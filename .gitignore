@@ -28,6 +28,3 @@ modules/platforms/cpp/cmake-build-*
 
 # OpenAPI spec file
 modules/rest-api/openapi/openapi.*
-
-# NonDex generated files
-.nondex
